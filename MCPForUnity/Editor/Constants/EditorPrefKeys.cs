@@ -11,7 +11,8 @@ namespace MCPForUnity.Editor.Constants
         internal const string ValidationLevel = "MCPForUnity.ValidationLevel";
         internal const string UnitySocketPort = "MCPForUnity.UnitySocketPort";
         internal const string ResumeHttpAfterReload = "MCPForUnity.ResumeHttpAfterReload";
-        internal const string ResumeStdioAfterReload = "MCPForUnity.ResumeStdioAfterReload";
+        public const string ResumeStdioAfterReload = "MCPForUnity.ResumeStdioAfterReload";
+        public const string StdioEnabledByUser = "MCPForUnity.StdioEnabledByUser";
 
         internal const string UvxPathOverride = "MCPForUnity.UvxPath";
         internal const string ClaudeCliPathOverride = "MCPForUnity.ClaudeCliPath";
@@ -21,21 +22,15 @@ namespace MCPForUnity.Editor.Constants
         internal const string WebSocketUrlOverride = "MCPForUnity.WebSocketUrl";
         internal const string GitUrlOverride = "MCPForUnity.GitUrlOverride";
 
-        internal const string PackageDeploySourcePath = "MCPForUnity.PackageDeploy.SourcePath";
-        internal const string PackageDeployLastBackupPath = "MCPForUnity.PackageDeploy.LastBackupPath";
-        internal const string PackageDeployLastTargetPath = "MCPForUnity.PackageDeploy.LastTargetPath";
-        internal const string PackageDeployLastSourcePath = "MCPForUnity.PackageDeploy.LastSourcePath";
-
         internal const string ServerSrc = "MCPForUnity.ServerSrc";
         internal const string UseEmbeddedServer = "MCPForUnity.UseEmbeddedServer";
         internal const string LockCursorConfig = "MCPForUnity.LockCursorConfig";
         internal const string AutoRegisterEnabled = "MCPForUnity.AutoRegisterEnabled";
-        internal const string ToolEnabledPrefix = "MCPForUnity.ToolEnabled.";
-        internal const string ToolFoldoutStatePrefix = "MCPForUnity.ToolFoldout.";
-        internal const string EditorWindowActivePanel = "MCPForUnity.EditorWindow.ActivePanel";
 
         internal const string SetupCompleted = "MCPForUnity.SetupCompleted";
         internal const string SetupDismissed = "MCPForUnity.SetupDismissed";
+        
+        internal const string EditorWindowActivePanel = "MCPForUnityEditorWindow.ActivePanel";
 
         internal const string CustomToolRegistrationEnabled = "MCPForUnity.CustomToolRegistrationEnabled";
 
@@ -45,5 +40,18 @@ namespace MCPForUnity.Editor.Constants
 
         internal const string TelemetryDisabled = "MCPForUnity.TelemetryDisabled";
         internal const string CustomerUuid = "MCPForUnity.CustomerUUID";
+
+        // Path Overrides
+        internal const string PythonPathOverride = "MCPForUnity.PythonPathOverride";
+        internal const string NodePathOverride = "MCPForUnity.NodePathOverride";
+        internal const string UvPathOverride = "MCPForUnity.UvPathOverride";
+
+        // Package Override & Tool Config
+        internal const string PackageOverrideSourcePath = "MCPForUnity.Override.SourcePath";
+        internal const string PackageOverrideLastBackupPath = "MCPForUnity.Override.LastBackupPath";
+        internal const string PackageOverrideLastTargetPath = "MCPForUnity.Override.LastTargetPath";
+        internal const string PackageOverrideLastSourcePath = "MCPForUnity.Override.LastSourcePath";
+        internal const string ToolFoldoutStatePrefix = "MCPForUnity.Tool.Foldout.";
+        internal const string ToolEnabledPrefix = "MCPForUnity.Tool.Enabled.";
     }
 }

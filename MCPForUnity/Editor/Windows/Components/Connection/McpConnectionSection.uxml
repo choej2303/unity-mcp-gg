@@ -1,4 +1,4 @@
-<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" editor-extension-mode="True">
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xmlns:logs="MCPForUnity.Editor.Windows.Components.Logs" editor-extension-mode="True">
     <Style src="../Common.uss" />
     <ui:VisualElement name="connection-section" class="section">
         <ui:Label text="Connection" class="section-title" />
@@ -42,6 +42,7 @@
                 </ui:VisualElement>
                 <ui:Button name="test-connection-button" text="Test" class="action-button" />
             </ui:VisualElement>
+            
         </ui:VisualElement>
     </ui:VisualElement>
 </ui:UXML>
