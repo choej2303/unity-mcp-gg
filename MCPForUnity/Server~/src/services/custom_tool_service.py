@@ -87,14 +87,37 @@ class CustomToolService:
 
     # --- Public API for MCP tools ---------------------------------------
     async def list_registered_tools(self, project_id: str) -> list[ToolDefinitionModel]:
+        # Sync tools from Unity (Stdio bridge)
+        # We need a way to map project_id back to specific unity instance if possible,
+        # but for now we might sync from ALL active instances or default one?
+        # Actually list_registered_tools is often called without project_id if it's GLOBAL.
+        # But here it takes project_id.
+        
+        # Determine the Unity instance for this project_id would be hard unless we track it.
+        # However, CustomToolService is global.
+        
+        # Try to sync tools from Unity Stdio Bridge
+        await self._sync_all_unity_tools()
+
         legacy = list(self._project_tools.get(project_id, {}).values())
         hub_tools = await PluginHub.get_tools_for_project(project_id)
         return legacy + hub_tools
 
     async def get_tool_definition(self, project_id: str, tool_name: str) -> ToolDefinitionModel | None:
+        # Check cache first
         tool = self._project_tools.get(project_id, {}).get(tool_name)
         if tool:
             return tool
+            
+        # If not found, maybe sync?
+        if not tool:
+             # Just-in-time sync (maybe a specific tool was just added)
+             # But limit frequency
+             await self._sync_all_unity_tools(force=False)
+             tool = self._project_tools.get(project_id, {}).get(tool_name)
+             if tool:
+                 return tool
+
         return await PluginHub.get_tool_definition(project_id, tool_name)
 
     async def execute_tool(
@@ -110,6 +133,11 @@ class CustomToolService:
         )
 
         definition = await self.get_tool_definition(project_id, tool_name)
+        if definition is None:
+            # One last try to sync
+            await self._sync_all_unity_tools(force=True)
+            definition = await self.get_tool_definition(project_id, tool_name)
+
         if definition is None:
             return MCPResponse(
                 success=False,
@@ -145,6 +173,76 @@ class CustomToolService:
     def _register_tool(self, project_id: str, definition: ToolDefinitionModel) -> None:
         self._project_tools.setdefault(project_id, {})[
             definition.name] = definition
+
+    _last_sync_time: float = 0
+    _sync_interval: float = 5.0 # Seconds
+
+    async def _sync_all_unity_tools(self, force: bool = False):
+        if not force and (time.time() - self._last_sync_time < self._sync_interval):
+            return
+
+        self._last_sync_time = time.time()
+        
+        try:
+            pool = get_unity_connection_pool()
+            instances = pool.discover_all_instances()
+            
+            for inst in instances:
+                try:
+                    # Request tool list from this instance
+                    response = await async_send_command_with_retry(
+                        "list_csharp_tools", 
+                        {}, 
+                        instance_id=inst.id
+                    )
+                    
+                    if not isinstance(response, dict) or "tools" not in response:
+                        continue
+                        
+                    # Calculate project_id for this instance
+                    pid = compute_project_id(inst.name, inst.path)
+                    
+                    # Register tools
+                    for tool_data in response["tools"]:
+                        # Validate basic fields
+                        if "name" not in tool_data:
+                            continue
+                            
+                        # Convert to ToolDefinitionModel
+                        try:
+                            # Map fields manually to ensure compatibility
+                            params_models = []
+                            for p in tool_data.get("parameters", []):
+                                params_models.append(ToolParameterModel(
+                                    name=p["name"],
+                                    description=p.get("description"),
+                                    type=p.get("type", "string"),
+                                    required=p.get("required", True),
+                                    default_value=p.get("default_value")
+                                ))
+
+                            defn = ToolDefinitionModel(
+                                name=tool_data["name"],
+                                description=tool_data.get("description"),
+                                structured_output=tool_data.get("structured_output", True),
+                                requires_polling=tool_data.get("requires_polling", False),
+                                poll_action=tool_data.get("poll_action", "status"),
+                                parameters=params_models
+                            )
+                            
+                            # Only auto-register if the tool says so
+                            if tool_data.get("auto_register", True):
+                                self._register_tool(pid, defn)
+                                
+                        except ValidationError as ve:
+                            logger.warn(f"Failed to validate tool {tool_data.get('name')}: {ve}")
+                            
+                except Exception as ex:
+                    logger.debug(f"Failed to sync tools from instance {inst.id}: {ex}")
+                    
+        except Exception as e:
+            logger.warn(f"Error during Unity tool sync: {e}")
+
 
     def get_project_id_for_hash(self, project_hash: str | None) -> str | None:
         if not project_hash:
@@ -266,12 +364,7 @@ class CustomToolService:
             return None
         return {"message": str(response)}
 
-    def _safe_response(self, response):
-        if isinstance(response, dict):
-            return response
-        if response is None:
-            return None
-        return {"message": str(response)}
+
 
 
 def compute_project_id(project_name: str, project_path: str) -> str:

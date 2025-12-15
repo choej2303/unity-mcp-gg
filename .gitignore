@@ -39,3 +39,4 @@ TestProjects/UnityMCPTests/Packages/packages-lock.json
 *.backup.meta
 
 .wt-origin-main/
+MCPForUnity/Server~/wrapper.log

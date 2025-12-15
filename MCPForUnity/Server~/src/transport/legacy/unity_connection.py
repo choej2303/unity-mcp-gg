@@ -12,6 +12,7 @@ import socket
 import struct
 import threading
 import time
+import sys
 from typing import Any
 
 from models.models import MCPResponse, UnityInstanceInfo
@@ -42,6 +43,7 @@ class UnityConnection:
             self.port = stdio_port_registry.get_port(self.instance_id)
         self._io_lock = threading.Lock()
         self._conn_lock = threading.Lock()
+        self._recv_buffer = bytearray()  # Persistent buffer for stream processing
 
     def _prepare_socket(self, sock: socket.socket) -> None:
         try:
@@ -66,6 +68,7 @@ class UnityConnection:
                     (self.host, self.port), connect_timeout)
                 self._prepare_socket(self.sock)
                 logger.debug(f"Connected to Unity at {self.host}:{self.port}")
+                self._recv_buffer.clear()  # Reset buffer on new connection
 
                 # Strict handshake: require FRAMING=1
                 try:
@@ -125,6 +128,8 @@ class UnityConnection:
                 logger.error(f"Error disconnecting from Unity: {str(e)}")
             finally:
                 self.sock = None
+                with self._conn_lock:
+                    self._recv_buffer.clear()
 
     def _read_exact(self, sock: socket.socket, count: int) -> bytes:
         data = bytearray()
@@ -137,7 +142,7 @@ class UnityConnection:
         return bytes(data)
 
     def receive_full_response(self, sock, buffer_size=config.buffer_size) -> bytes:
-        """Receive a complete response from Unity, handling chunked data."""
+        """Receive a complete response from Unity, handling chunked data and buffering."""
         if self.use_framing:
             # Heartbeat semantics: the Unity editor emits zero-length frames while
             # a long-running command is still executing. We tolerate a bounded
@@ -176,56 +181,65 @@ class UnityConnection:
                 logger.error(f"Error during framed receive: {exc}")
                 raise
 
-        chunks = []
-        # Respect the socket's currently configured timeout
+        # Legacy Mode: Robust JSON Stream Decoding with Persistent Buffer
+        decoder = json.JSONDecoder()
         try:
             while True:
+                # 1. Try to decode what we already have in the buffer
+                if self._recv_buffer:
+                    try:
+                        decoded_str = self._recv_buffer.decode('utf-8')
+                        obj, idx = decoder.raw_decode(decoded_str)
+                        
+                        # Verify we caught the full object (no dangling braces)
+                        # raw_decode stops at the end of the JSON object.
+                        
+                        # Special handling for ping-pong which might be non-standard in legacy?
+                        # No, if it's JSON, raw_decode handles it.
+                        
+                        # Extract the consumed bytes
+                        # idx is the character index in the string.
+                        # We need to find the byte offset corresponding to that char index.
+                        # This is tricky with UTF-8 multibyte chars.
+                        # Ideally we decode only as much as needed or re-encode to find byte length.
+                        
+                        # Simplified approach: Re-encode the slice to calculate byte length removal
+                        consumed_str = decoded_str[:idx]
+                        consumed_bytes_len = len(consumed_str.encode('utf-8'))
+                        
+                        # If meaningful JSON found, return it
+                        result_bytes = self._recv_buffer[:consumed_bytes_len]
+                        
+                        # Remove consumed bytes from buffer
+                        del self._recv_buffer[:consumed_bytes_len]
+                        
+                        # Trim leading whitespace from buffer for next read
+                        # (JSON allows whitespace, but we want to keep buffer clean)
+                        while self._recv_buffer and self._recv_buffer[0:1].isspace():
+                             del self._recv_buffer[0:1]
+                             
+                        logger.info(f"Received complete response ({len(result_bytes)} bytes)")
+                        return result_bytes
+
+                    except json.JSONDecodeError:
+                        # Incomplete JSON, need more data
+                        pass
+                    except UnicodeDecodeError:
+                        # Incomplete UTF-8 sequence, need more data
+                        pass
+
+                # 2. Need more data
                 chunk = sock.recv(buffer_size)
                 if not chunk:
-                    if not chunks:
-                        raise Exception(
-                            "Connection closed before receiving data")
-                    break
-                chunks.append(chunk)
-
-                # Process the data received so far
-                data = b''.join(chunks)
-                decoded_data = data.decode('utf-8')
-
-                # Check if we've received a complete response
-                try:
-                    # Special case for ping-pong
-                    if decoded_data.strip().startswith('{"status":"success","result":{"message":"pong"'):
-                        logger.debug("Received ping response")
-                        return data
-
-                    # Handle escaped quotes in the content
-                    if '"content":' in decoded_data:
-                        # Find the content field and its value
-                        content_start = decoded_data.find('"content":') + 9
-                        content_end = decoded_data.rfind('"', content_start)
-                        if content_end > content_start:
-                            # Replace escaped quotes in content with regular quotes
-                            content = decoded_data[content_start:content_end]
-                            content = content.replace('\\"', '"')
-                            decoded_data = decoded_data[:content_start] + \
-                                content + decoded_data[content_end:]
-
-                    # Validate JSON format
-                    json.loads(decoded_data)
-
-                    # If we get here, we have valid JSON
-                    logger.info(
-                        f"Received complete response ({len(data)} bytes)")
-                    return data
-                except json.JSONDecodeError:
-                    # We haven't received a complete valid JSON response yet
-                    continue
-                except Exception as e:
-                    logger.warning(
-                        f"Error processing response chunk: {str(e)}")
-                    # Continue reading more chunks as this might not be the complete response
-                    continue
+                    if not self._recv_buffer:
+                         raise Exception("Connection closed before receiving data")
+                    # If connection closes but we have data, we might be in trouble
+                    # or it might be the last message. Attempt one last decode?
+                    # For now, treat as error if we expected more.
+                    raise Exception("Connection closed with incomplete data buffer")
+                
+                self._recv_buffer.extend(chunk)
+                
         except socket.timeout:
             logger.warning("Socket timeout during receive")
             raise Exception("Timeout receiving Unity response")
@@ -611,7 +625,48 @@ class UnityConnectionPool:
         with self._pool_lock:
             if target.id not in self._connections:
                 logger.info(
-                    f"Creating new connection to Unity instance: {target.id} (port {target.port})")
+                    f"Creating new connection to Unity instance: {target.id}")
+                
+                # Try IPC first on Windows
+                from transport.legacy.pipe_connection import UnityPipeConnection, _HAS_WIN32
+                if _HAS_WIN32 and sys.platform == 'win32':
+                     # Extract hash for IPC
+                     # target.hash *should* be populated by PortDiscovery
+                     pipe_hash = target.hash
+                     if not pipe_hash and target.path:
+                         # Fallback hash computation if missing
+                         import hashlib
+                         pipe_hash = hashlib.sha1(target.path.encode('utf-8')).hexdigest()[:8]
+                     
+                     if pipe_hash:
+                         conn = UnityPipeConnection(project_hash=pipe_hash)
+                         if conn.connect():
+                             logger.info(f"Using Named Pipe for instance {target.id}")
+                             self._connections[target.id] = conn
+                             return conn
+                         else:
+                             logger.warning(f"Named Pipe connection failed for hash {pipe_hash}, falling back to TCP")
+
+                # Try UDS on macOS/Linux
+                if sys.platform != 'win32':
+                     from transport.legacy.uds_connection import UnityUdsConnection
+                     
+                     uds_hash = target.hash
+                     if not uds_hash and target.path:
+                         import hashlib
+                         uds_hash = hashlib.sha1(target.path.encode('utf-8')).hexdigest()[:8]
+                     
+                     if uds_hash:
+                         conn = UnityUdsConnection(project_hash=uds_hash)
+                         if conn.connect():
+                             logger.info(f"Using UDS for instance {target.id}")
+                             self._connections[target.id] = conn
+                             return conn
+                         else:
+                             logger.debug(f"UDS connection failed for hash {uds_hash}, falling back to TCP")
+
+                # Fallback to TCP
+                logger.info(f"Using TCP connection for {target.id} on port {target.port}")
                 conn = UnityConnection(port=target.port, instance_id=target.id)
                 if not conn.connect():
                     raise ConnectionError(
@@ -622,11 +677,15 @@ class UnityConnectionPool:
             else:
                 # Update existing connection with instance_id and port if changed
                 conn = self._connections[target.id]
-                conn.instance_id = target.id
-                if conn.port != target.port:
-                    logger.info(
-                        f"Updating cached port for {target.id}: {conn.port} -> {target.port}")
-                    conn.port = target.port
+                
+                # If we have an existing TCP connection but want to check port changes
+                if isinstance(conn, UnityConnection):
+                    conn.instance_id = target.id
+                    if conn.port != target.port:
+                        logger.info(
+                            f"Updating cached port for {target.id}: {conn.port} -> {target.port}")
+                        conn.port = target.port
+                
                 logger.debug(f"Reusing existing connection to: {target.id}")
 
             return self._connections[target.id]

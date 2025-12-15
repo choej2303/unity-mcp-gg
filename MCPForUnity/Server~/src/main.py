@@ -65,13 +65,6 @@ for noisy in (
     "httpx", 
     "urllib3", 
     "mcp.server.lowlevel.server", 
-    "uvicorn", 
-    "uvicorn.access", 
-    "uvicorn.error", 
-    "docket", 
-    "docket.worker", 
-    "fastmcp",   # <--- 🚨 범인 검거
-    "starlette"  # <--- 혹시 모를 공범
 ):
     try:
         logging.getLogger(noisy).setLevel(
@@ -335,7 +328,7 @@ Examples:
     parser.add_argument(
         "--transport",
         type=str,
-        choices=["stdio", "http"],
+        choices=["stdio", "http", "sse"],
         default="stdio",
         help="Transport protocol to use: stdio or http (default: stdio). "
              "Overrides UNITY_MCP_TRANSPORT environment variable."
@@ -399,9 +392,9 @@ Examples:
         logger.info(f"HTTP port override: {http_port}")
 
     # Determine transport mode
-    if transport_mode == 'http':
-        # Use HTTP transport for FastMCP
-        transport = 'http'
+    if transport_mode == 'http' or transport_mode == 'sse':
+        # Use SSE transport for Unity compatibility (standard /sse endpoint)
+        transport = 'sse'
         # Use the parsed host and port from URL/args
         http_url = os.environ.get("UNITY_MCP_HTTP_URL", args.http_url)
         parsed_url = urlparse(http_url)
@@ -409,12 +402,30 @@ Examples:
             "UNITY_MCP_HTTP_HOST") or parsed_url.hostname or "localhost"
         port = args.http_port or (int(os.environ.get("UNITY_MCP_HTTP_PORT")) if os.environ.get(
             "UNITY_MCP_HTTP_PORT") else None) or parsed_url.port or 8080
-        logger.info(f"Starting FastMCP with HTTP transport on {host}:{port}")
+            
+        logger.info(f"Starting FastMCP with SSE transport on {host}:{port}")
         mcp.run(transport=transport, host=host, port=port)
     else:
+        
         # Use stdio transport for traditional MCP
         logger.info("Starting FastMCP with stdio transport")
-        mcp.run(transport='stdio', show_banner=False)
+        # 🚨 [CRITICAL] In STDIO mode only, suppress related loggers.
+        # Silence Uvicorn and related loggers to prevent stdout pollution.
+        # 🚨 [CRITICAL] Prevent stdout pollution in STDIO mode
+        for name in (
+            "uvicorn", "uvicorn.error", "uvicorn.access",
+            "starlette",
+            "docket", "docket.worker",
+            "fastmcp",
+        ):
+            lg = logging.getLogger(name)
+            lg.setLevel(logging.WARNING) # ERROR if still too chatty
+            lg.propagate = False # prevent duplicate root logs
+            # If the rotating file handler was successfully created, attach it
+            if '_fh' in globals() and _fh not in lg.handlers:
+                lg.addHandler(_fh)
+
+        mcp.run(transport='stdio')
 
 
 # Run the server

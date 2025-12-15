@@ -1,6 +1,6 @@
 [project]
 name = "MCPForUnityServer"
-version = "8.2.2"
+version = "8.2.3"
 description = "MCP for Unity Server: A Unity package for Unity Editor integration via the Model Context Protocol (MCP)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -11,6 +11,7 @@ dependencies = [
  "pydantic>=2.12.5",
  "fastapi>=0.121.1",
  "uvicorn>=0.38.0",
+ "pywin32>=306; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
@@ -20,7 +21,10 @@ dev = [
 ]
 
 [project.scripts]
-mcp-for-unity = "main:main"
+mcp-for-unity = "src.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [build-system]
 requires = ["setuptools>=80.9.0", "wheel>=0.45.1"]
