@@ -10,6 +10,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEngine;
+using System.Linq;
 
 namespace MCPForUnity.Editor.Clients
 {
@@ -91,8 +92,12 @@ namespace MCPForUnity.Editor.Clients
             try
             {
                 string path = GetConfigPath();
+                // DEBUG LOG - To be removed
+                // McpLog.Info($"Checking config path: {path} (Exists: {File.Exists(path)})");
+
                 if (!File.Exists(path))
                 {
+                    McpLog.Warn($"Config file not found at: {path}"); // Log as Warn so user sees it in Console
                     client.SetStatus(McpStatus.NotConfigured);
                     return client.status;
                 }
@@ -101,6 +106,8 @@ namespace MCPForUnity.Editor.Clients
                 string[] args = null;
                 string configuredUrl = null;
                 bool configExists = false;
+
+                string command = null;
 
                 if (client.IsVsCodeLayout)
                 {
@@ -114,12 +121,8 @@ namespace MCPForUnity.Editor.Clients
                         if (unityToken is JObject unityObj)
                         {
                             configExists = true;
-
-                            var argsToken = unityObj["args"];
-                            if (argsToken is JArray)
-                            {
-                                args = argsToken.ToObject<string[]>();
-                            }
+                            command = ExtractCommand(unityObj);
+                            args = ExtractArgs(unityObj);
 
                             var urlToken = unityObj["url"] ?? unityObj["serverUrl"];
                             if (urlToken != null && urlToken.Type != JTokenType.Null)
@@ -131,33 +134,92 @@ namespace MCPForUnity.Editor.Clients
                 }
                 else
                 {
-                    McpConfig standardConfig = JsonConvert.DeserializeObject<McpConfig>(configJson);
-                    if (standardConfig?.mcpServers?.unityMCP != null)
+                    // Use JObject parsing for flexibility (handling both url and serverUrl without strict model dependency)
+                    var rootObj = JsonConvert.DeserializeObject<JToken>(configJson) as JObject;
+                    var unityToken = rootObj?["mcpServers"]?["unityMCP"];
+                    
+                    if (unityToken is JObject unityObj)
                     {
-                        args = standardConfig.mcpServers.unityMCP.args;
                         configExists = true;
+                        command = ExtractCommand(unityObj);
+                        args = ExtractArgs(unityObj);
+
+                        // Check for both 'url' (standard) and 'serverUrl' (Antigravity)
+                        var urlToken = unityObj["url"] ?? unityObj["serverUrl"];
+                        if (urlToken != null && urlToken.Type != JTokenType.Null)
+                        {
+                            configuredUrl = urlToken.ToString();
+                        }
                     }
                 }
 
                 if (!configExists)
                 {
+                    McpLog.Warn("Config file exists but 'unityMCP' entry is missing in JSON.");
                     client.SetStatus(McpStatus.MissingConfig);
                     return client.status;
                 }
 
                 bool matches = false;
-                if (args != null && args.Length > 0)
-                {
-                    string expectedUvxUrl = AssetPathUtility.GetMcpServerGitUrl();
-                    string configuredUvxUrl = McpConfigurationHelper.ExtractUvxUrl(args);
-                    matches = !string.IsNullOrEmpty(configuredUvxUrl) &&
-                              McpConfigurationHelper.PathsEqual(configuredUvxUrl, expectedUvxUrl);
-                }
-                else if (!string.IsNullOrEmpty(configuredUrl))
-                {
-                    string expectedUrl = HttpEndpointUtility.GetMcpRpcUrl();
-                    matches = UrlsEqual(configuredUrl, expectedUrl);
-                }
+                bool useHttpTransport = EditorPrefs.GetBool(EditorPrefKeys.UseHttpTransport, true);
+                
+                    // Check: HTTP (Only check this if we are in HTTP mode)
+                    if (useHttpTransport)
+                    {
+                        if (!string.IsNullOrEmpty(configuredUrl))
+                        {
+                            string expectedUrl = HttpEndpointUtility.GetMcpRpcUrl();
+                            matches = UrlsEqual(configuredUrl, expectedUrl);
+                        }
+                    }
+                    else
+                    {
+                        // Check: Node.js Wrapper (Stdio) (Legacy)
+                        string expectedWrapper = AssetPathUtility.GetWrapperJsPath();
+                        
+                        // Check: UV / Python Direct (Offline Mode)
+                        bool isUvCommand = !string.IsNullOrEmpty(command) && 
+                                          Path.GetFileNameWithoutExtension(command).IndexOf("uv", StringComparison.OrdinalIgnoreCase) >= 0;
+                                          
+                        if (isUvCommand && args != null)
+                        {
+                             // Check if it's running src.main (common for local dev/offline mode)
+                             // args usually: run --directory "..." python -u -m src.main ...
+                             bool hasSrcMain = Array.Exists(args, a => a.Contains("src.main"));
+                             if (hasSrcMain)
+                             {
+                                 matches = true;
+                             }
+                        }
+                        
+                        // Check: Node Wrapper
+                        if (!matches && !string.IsNullOrEmpty(command) && args != null && args.Length > 0 && !string.IsNullOrEmpty(expectedWrapper))
+                        {
+                            try
+                            {
+                                if (Path.GetFileNameWithoutExtension(command).Equals("node", StringComparison.OrdinalIgnoreCase) &&
+                                    McpConfigurationHelper.PathsEqual(args[0], expectedWrapper))
+                                {
+                                    matches = true;
+                                }
+                            }
+                            catch (ArgumentException)
+                            {
+                                // Invalid command path, skip check
+                            }
+                        }
+                        
+                        // Check: UVX (Online Mode)
+                        if (!matches && args != null && args.Length > 0)
+                        {
+                            string expectedUvxUrl = AssetPathUtility.GetMcpServerGitUrl();
+                            string configuredUvxUrl = McpConfigurationHelper.ExtractUvxUrl(args);
+                            if (!string.IsNullOrEmpty(configuredUvxUrl) && !string.IsNullOrEmpty(expectedUvxUrl))
+                            {
+                                 matches = McpConfigurationHelper.PathsEqual(configuredUvxUrl, expectedUvxUrl);
+                            }
+                        }
+                    }
 
                 if (matches)
                 {
@@ -188,6 +250,26 @@ namespace MCPForUnity.Editor.Clients
             }
 
             return client.status;
+        }
+
+        private static string ExtractCommand(JObject configObj)
+        {
+            var commandToken = configObj["command"];
+            if (commandToken != null && commandToken.Type == JTokenType.String)
+            {
+                return commandToken.ToString();
+            }
+            return null;
+        }
+
+        private static string[] ExtractArgs(JObject configObj)
+        {
+            var argsToken = configObj["args"];
+            if (argsToken is JArray)
+            {
+                return argsToken.ToObject<string[]>();
+            }
+            return null;
         }
 
         public override void Configure()
@@ -327,6 +409,9 @@ namespace MCPForUnity.Editor.Clients
     /// <summary>CLI-based configurator (Claude Code).</summary>
     public abstract class ClaudeCliMcpConfigurator : McpClientConfiguratorBase
     {
+        private static readonly object _claudeCliLock = new object();
+        private static bool _isClaudeCliRunning = false;
+        
         public ClaudeCliMcpConfigurator(McpClient client) : base(client) { }
 
         public override bool SupportsAutoConfigure => true;
@@ -349,28 +434,7 @@ namespace MCPForUnity.Editor.Clients
 
                 string args = "mcp list";
                 string projectDir = Path.GetDirectoryName(Application.dataPath);
-
-                string pathPrepend = null;
-                if (Application.platform == RuntimePlatform.OSXEditor)
-                {
-                    pathPrepend = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
-                }
-                else if (Application.platform == RuntimePlatform.LinuxEditor)
-                {
-                    pathPrepend = "/usr/local/bin:/usr/bin:/bin";
-                }
-
-                try
-                {
-                    string claudeDir = Path.GetDirectoryName(claudePath);
-                    if (!string.IsNullOrEmpty(claudeDir))
-                    {
-                        pathPrepend = string.IsNullOrEmpty(pathPrepend)
-                            ? claudeDir
-                            : $"{claudeDir}:{pathPrepend}";
-                    }
-                }
-                catch { }
+                string pathPrepend = BuildPathPrepend(claudePath);
 
                 if (ExecPath.TryRun(claudePath, args, projectDir, out var stdout, out _, 10000, pathPrepend))
                 {
@@ -405,29 +469,127 @@ namespace MCPForUnity.Editor.Clients
 
         private void Register()
         {
-            var pathService = MCPServiceLocator.Paths;
-            string claudePath = pathService.GetClaudeCliPath();
-            if (string.IsNullOrEmpty(claudePath))
+            lock (_claudeCliLock)
             {
-                throw new InvalidOperationException("Claude CLI not found. Please install Claude Code first.");
+                if (_isClaudeCliRunning)
+                {
+                    throw new InvalidOperationException("Claude CLI operation already in progress. Please wait.");
+                }
+                _isClaudeCliRunning = true;
             }
-
-            bool useHttpTransport = EditorPrefs.GetBool(EditorPrefKeys.UseHttpTransport, true);
-
-            string args;
-            if (useHttpTransport)
+            
+            try
             {
-                string httpUrl = HttpEndpointUtility.GetMcpRpcUrl();
-                args = $"mcp add --transport http UnityMCP {httpUrl}";
+                var pathService = MCPServiceLocator.Paths;
+                string claudePath = pathService.GetClaudeCliPath();
+                if (string.IsNullOrEmpty(claudePath))
+                {
+                    throw new InvalidOperationException("Claude CLI not found. Please install Claude Code first.");
+                }
+
+                bool useHttpTransport = EditorPrefs.GetBool(EditorPrefKeys.UseHttpTransport, true);
+
+                string args;
+                if (useHttpTransport)
+                {
+                    string httpUrl = HttpEndpointUtility.GetMcpRpcUrl();
+                    args = $"mcp add --transport http UnityMCP {httpUrl}";
+                }
+                else
+                {
+                    var (uvxPath, gitUrl, packageName) = AssetPathUtility.GetUvxCommandParts();
+                    args = $"mcp add --transport stdio UnityMCP -- \"{uvxPath}\" --from \"{gitUrl}\" {packageName}";
+                }
+
+                string projectDir = Path.GetDirectoryName(Application.dataPath);
+                string pathPrepend = BuildPathPrepend(claudePath);
+
+                bool already = false;
+                if (!ExecPath.TryRun(claudePath, args, projectDir, out var stdout, out var stderr, 15000, pathPrepend))
+                {
+                    string combined = ($"{stdout}\n{stderr}") ?? string.Empty;
+                    if (combined.IndexOf("already exists", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        already = true;
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException($"Failed to register with Claude Code:\n{stderr}\n{stdout}");
+                    }
+                }
+
+                if (!already)
+                {
+                    McpLog.Info("Successfully registered with Claude Code.");
+                }
+
+                CheckStatus();
             }
-            else
+            finally
             {
-                var (uvxPath, gitUrl, packageName) = AssetPathUtility.GetUvxCommandParts();
-                args = $"mcp add --transport stdio UnityMCP -- \"{uvxPath}\" --from \"{gitUrl}\" {packageName}";
+                lock (_claudeCliLock)
+                {
+                    _isClaudeCliRunning = false;
+                }
             }
+        }
 
-            string projectDir = Path.GetDirectoryName(Application.dataPath);
+        private void Unregister()
+        {
+            lock (_claudeCliLock)
+            {
+                if (_isClaudeCliRunning)
+                {
+                    throw new InvalidOperationException("Claude CLI operation already in progress. Please wait.");
+                }
+                _isClaudeCliRunning = true;
+            }
+            
+            try
+            {
+                var pathService = MCPServiceLocator.Paths;
+                string claudePath = pathService.GetClaudeCliPath();
 
+                if (string.IsNullOrEmpty(claudePath))
+                {
+                    throw new InvalidOperationException("Claude CLI not found. Please install Claude Code first.");
+                }
+
+                string projectDir = Path.GetDirectoryName(Application.dataPath);
+                string pathPrepend = BuildPathPrepend(claudePath);
+
+                bool serverExists = ExecPath.TryRun(claudePath, "mcp get UnityMCP", projectDir, out _, out _, 7000, pathPrepend);
+
+                if (!serverExists)
+                {
+                    client.SetStatus(McpStatus.NotConfigured);
+                    McpLog.Info("No MCP for Unity server found - already unregistered.");
+                    return;
+                }
+
+                if (ExecPath.TryRun(claudePath, "mcp remove UnityMCP", projectDir, out var stdout, out var stderr, 10000, pathPrepend))
+                {
+                    McpLog.Info("MCP server successfully unregistered from Claude Code.");
+                }
+                else
+                {
+                    throw new InvalidOperationException($"Failed to unregister: {stderr}");
+                }
+
+                client.SetStatus(McpStatus.NotConfigured);
+                CheckStatus();
+            }
+            finally
+            {
+                lock (_claudeCliLock)
+                {
+                    _isClaudeCliRunning = false;
+                }
+            }
+        }
+
+        private static string BuildPathPrepend(string claudePath)
+        {
             string pathPrepend = null;
             if (Application.platform == RuntimePlatform.OSXEditor)
             {
@@ -450,69 +612,7 @@ namespace MCPForUnity.Editor.Clients
             }
             catch { }
 
-            bool already = false;
-            if (!ExecPath.TryRun(claudePath, args, projectDir, out var stdout, out var stderr, 15000, pathPrepend))
-            {
-                string combined = ($"{stdout}\n{stderr}") ?? string.Empty;
-                if (combined.IndexOf("already exists", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    already = true;
-                }
-                else
-                {
-                    throw new InvalidOperationException($"Failed to register with Claude Code:\n{stderr}\n{stdout}");
-                }
-            }
-
-            if (!already)
-            {
-                McpLog.Info("Successfully registered with Claude Code.");
-            }
-
-            CheckStatus();
-        }
-
-        private void Unregister()
-        {
-            var pathService = MCPServiceLocator.Paths;
-            string claudePath = pathService.GetClaudeCliPath();
-
-            if (string.IsNullOrEmpty(claudePath))
-            {
-                throw new InvalidOperationException("Claude CLI not found. Please install Claude Code first.");
-            }
-
-            string projectDir = Path.GetDirectoryName(Application.dataPath);
-            string pathPrepend = null;
-            if (Application.platform == RuntimePlatform.OSXEditor)
-            {
-                pathPrepend = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
-            }
-            else if (Application.platform == RuntimePlatform.LinuxEditor)
-            {
-                pathPrepend = "/usr/local/bin:/usr/bin:/bin";
-            }
-
-            bool serverExists = ExecPath.TryRun(claudePath, "mcp get UnityMCP", projectDir, out _, out _, 7000, pathPrepend);
-
-            if (!serverExists)
-            {
-                client.SetStatus(McpStatus.NotConfigured);
-                McpLog.Info("No MCP for Unity server found - already unregistered.");
-                return;
-            }
-
-            if (ExecPath.TryRun(claudePath, "mcp remove UnityMCP", projectDir, out var stdout, out var stderr, 10000, pathPrepend))
-            {
-                McpLog.Info("MCP server successfully unregistered from Claude Code.");
-            }
-            else
-            {
-                throw new InvalidOperationException($"Failed to unregister: {stderr}");
-            }
-
-            client.SetStatus(McpStatus.NotConfigured);
-            CheckStatus();
+            return pathPrepend;
         }
 
         public override string GetManualSnippet()

@@ -21,6 +21,8 @@ namespace MCPForUnity.Editor.Services
         private static TransportManager _transportManager;
         private static IPackageDeploymentService _packageDeploymentService;
 
+        private static ConsoleSyncService _consoleSyncService;
+
         public static IBridgeControlService Bridge => _bridgeService ??= new BridgeControlService();
         public static IClientConfigurationService Client => _clientService ??= new ClientConfigurationService();
         public static IPathResolverService Paths => _pathService ??= new PathResolverService();
@@ -31,6 +33,7 @@ namespace MCPForUnity.Editor.Services
         public static IServerManagementService Server => _serverManagementService ??= new ServerManagementService();
         public static TransportManager TransportManager => _transportManager ??= new TransportManager();
         public static IPackageDeploymentService Deployment => _packageDeploymentService ??= new PackageDeploymentService();
+        public static ConsoleSyncService ConsoleSync => _consoleSyncService ??= new ConsoleSyncService(TransportManager);
 
         /// <summary>
         /// Registers a custom implementation for a service (useful for testing)
@@ -59,6 +62,8 @@ namespace MCPForUnity.Editor.Services
                 _packageDeploymentService = pd;
             else if (implementation is TransportManager tm)
                 _transportManager = tm;
+            else if (implementation is ConsoleSyncService cs)
+                _consoleSyncService = cs;
         }
 
         /// <summary>
@@ -76,6 +81,7 @@ namespace MCPForUnity.Editor.Services
             (_serverManagementService as IDisposable)?.Dispose();
             (_transportManager as IDisposable)?.Dispose();
             (_packageDeploymentService as IDisposable)?.Dispose();
+            (_consoleSyncService as IDisposable)?.Dispose();
 
             _bridgeService = null;
             _clientService = null;
@@ -87,6 +93,7 @@ namespace MCPForUnity.Editor.Services
             _serverManagementService = null;
             _transportManager = null;
             _packageDeploymentService = null;
+            _consoleSyncService = null;
         }
     }
 }

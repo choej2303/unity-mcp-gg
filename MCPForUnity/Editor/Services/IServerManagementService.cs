@@ -3,7 +3,7 @@ namespace MCPForUnity.Editor.Services
     /// <summary>
     /// Interface for server management operations
     /// </summary>
-    public interface IServerManagementService
+    public interface IServerManagementService : System.IDisposable
     {
         /// <summary>
         /// Clear the local uvx cache for the MCP server package
@@ -42,5 +42,15 @@ namespace MCPForUnity.Editor.Services
         /// </summary>
         /// <returns>True if HTTP transport is enabled and URL is local</returns>
         bool CanStartLocalServer();
+
+        /// <summary>
+        /// Event fired when the server process outputs to stdout
+        /// </summary>
+        event System.Action<string> OnLogReceived;
+
+        /// <summary>
+        /// Event fired when the server process outputs to stderr
+        /// </summary>
+        event System.Action<string> OnErrorReceived;
     }
 }

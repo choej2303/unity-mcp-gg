@@ -74,6 +74,16 @@ namespace MCPForUnity.Editor.Services
             }
         }
 
+        public string ConnectionDetails
+        {
+            get
+            {
+                var mode = ResolvePreferredMode();
+                var state = _transportManager.GetState(mode);
+                return state.Details;
+            }
+        }
+
         public bool IsAutoConnectMode => StdioBridgeHost.IsAutoConnectMode();
         public TransportMode? ActiveMode => ResolvePreferredMode();
 

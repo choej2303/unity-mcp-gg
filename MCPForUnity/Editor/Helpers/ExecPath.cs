@@ -209,7 +209,37 @@ namespace MCPForUnity.Editor.Helpers
 
                 if (!process.WaitForExit(timeoutMs))
                 {
-                    try { process.Kill(); } catch { }
+                    // Timeout occurred - kill the process (child processes may remain due to Unity .NET limitations)
+                    try 
+                    { 
+                        if (!process.HasExited)
+                        {
+                            int pid = process.Id;
+                            try
+                            {
+                                // Kill process (entireProcessTree not supported in Unity .NET profile)
+                                process.Kill();
+                                
+                                // Wait a bit to ensure the process actually terminates
+                                if (!process.WaitForExit(1000))
+                                {
+                                    McpLog.Warn($"Process {pid} did not exit after Kill command");
+                                }
+                            }
+                            catch (InvalidOperationException)
+                            {
+                                // Process already exited - that's fine
+                            }
+                            catch (Exception killEx)
+                            {
+                                McpLog.Warn($"Failed to kill process {pid}: {killEx.Message}");
+                            }
+                        }
+                    } 
+                    catch (Exception ex) 
+                    { 
+                        McpLog.Debug($"Error during process cleanup: {ex.Message}");
+                    }
                     return false;
                 }
 
@@ -235,14 +265,33 @@ namespace MCPForUnity.Editor.Helpers
                 {
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
+                    RedirectStandardError = true, // Consume stderr
                     CreateNoWindow = true,
                 };
                 string path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
                 psi.EnvironmentVariables["PATH"] = string.IsNullOrEmpty(path) ? prependPath : (prependPath + Path.PathSeparator + path);
-                using var p = Process.Start(psi);
-                string output = p?.StandardOutput.ReadToEnd().Trim();
-                p?.WaitForExit(1500);
-                return (!string.IsNullOrEmpty(output) && File.Exists(output)) ? output : null;
+                
+                using var p = new Process { StartInfo = psi };
+                var outputBuilder = new StringBuilder();
+                
+                p.OutputDataReceived += (sender, e) => { if (e.Data != null) outputBuilder.AppendLine(e.Data); };
+                p.ErrorDataReceived += (sender, e) => { }; // Drain stderr
+
+                if (!p.Start()) return null;
+
+                p.BeginOutputReadLine();
+                p.BeginErrorReadLine();
+
+                if (p.WaitForExit(2000))
+                {
+                    string output = outputBuilder.ToString().Trim();
+                    return (!string.IsNullOrEmpty(output) && File.Exists(output)) ? output : null;
+                }
+                else
+                {
+                    try { p.Kill(); } catch { }
+                    return null;
+                }
             }
             catch { return null; }
         }
@@ -257,14 +306,33 @@ namespace MCPForUnity.Editor.Helpers
                 {
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
+                    RedirectStandardError = true, // Consume stderr
                     CreateNoWindow = true,
                 };
-                using var p = Process.Start(psi);
-                string first = p?.StandardOutput.ReadToEnd()
-                    .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                    .FirstOrDefault();
-                p?.WaitForExit(1500);
-                return (!string.IsNullOrEmpty(first) && File.Exists(first)) ? first : null;
+                
+                using var p = new Process { StartInfo = psi };
+                var outputBuilder = new StringBuilder();
+
+                p.OutputDataReceived += (sender, e) => { if (e.Data != null) outputBuilder.AppendLine(e.Data); };
+                p.ErrorDataReceived += (sender, e) => { }; // Drain stderr
+
+                if (!p.Start()) return null;
+
+                p.BeginOutputReadLine();
+                p.BeginErrorReadLine();
+
+                if (p.WaitForExit(2000))
+                {
+                    string first = outputBuilder.ToString()
+                        .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                        .FirstOrDefault();
+                    return (!string.IsNullOrEmpty(first) && File.Exists(first)) ? first : null;
+                }
+                else
+                {
+                    try { p.Kill(); } catch { }
+                    return null;
+                }
             }
             catch { return null; }
         }

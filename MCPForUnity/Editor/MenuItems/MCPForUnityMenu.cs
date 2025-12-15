@@ -1,29 +1,20 @@
-using MCPForUnity.Editor.Setup;
 using MCPForUnity.Editor.Windows;
 using UnityEditor;
-using UnityEngine;
 
 namespace MCPForUnity.Editor.MenuItems
 {
     public static class MCPForUnityMenu
     {
-        [MenuItem("Window/MCP For Unity/Setup Window", priority = 1)]
-        public static void ShowSetupWindow()
+        [MenuItem("Window/MCP For Unity %#m", priority = 1)]
+        public static void ShowMCPWindow()
         {
-            SetupWindowService.ShowSetupWindow();
+            MCPForUnityEditorWindow.ShowWindow();
         }
-
-        [MenuItem("Window/MCP For Unity/Toggle MCP Window %#m", priority = 2)]
-        public static void ToggleMCPWindow()
+        [MenuItem("Tools/MCP For Unity/Open Server Logs", priority = 20)]
+        public static void ShowLogWindow()
         {
-            if (MCPForUnityEditorWindow.HasAnyOpenWindow())
-            {
-                MCPForUnityEditorWindow.CloseAllOpenWindows();
-            }
-            else
-            {
-                MCPForUnityEditorWindow.ShowWindow();
-            }
+            McpLogWindow.ShowWindow();
         }
     }
 }
+

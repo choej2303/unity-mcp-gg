@@ -1,41 +1,136 @@
-/* Root Layout */
-#root-container {
-    padding: 16px;
-    flex-direction: column;
-    flex-grow: 1;
-    overflow: hidden;
-    box-sizing: border-box;
+/* MCPForUnityEditorWindow.uss */
+
+.status-header {
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background-color: var(--unity-colors-toolbar-background);
+    border-bottom-width: 1px;
+    border-bottom-color: var(--unity-colors-app_toolbar_button-border);
+    height: 48px; /* Slightly taller for better touch target */
+    flex-shrink: 0; /* Prevent shrinking */
 }
 
-/* Title */
-.title {
-    font-size: 20px;
+.status-left {
+    flex-direction: row;
+    align-items: center;
+    flex-shrink: 1; /* Allow left side to shrink if needed, but header won't */
+    min-width: 0;
+    overflow: hidden;
+}
+
+/* ... existing code ... */
+
+.setup-container-root {
+    background-color: var(--unity-colors-box-background);
+    border-bottom-width: 1px;
+    border-bottom-color: var(--unity-colors-app_toolbar_button-border);
+    padding: 10px;
+    flex-shrink: 0; /* Prevent shrinking */
+}
+
+.status-indicator {
+    width: 12px;
+    height: 12px;
+    border-radius: 6px;
+    margin-right: 8px;
+    background-color: var(--unity-colors-label-text); /* Fallback */
+    border-width: 1px;
+    border-color: var(--unity-colors-app_toolbar_button-border);
+}
+
+.status-indicator.ready {
+    background-color: #4CAF50; /* Green - Keep Semantic */
+    border-color: #388E3C;
+}
+
+.status-indicator.error {
+    background-color: #F44336; /* Red - Keep Semantic */
+    border-color: #D32F2F;
+}
+
+.status-text-header {
+    font-size: 14px;
     -unity-font-style: bold;
-    margin-bottom: 16px;
-    padding: 12px;
-    background-color: rgba(0, 0, 0, 0.1);
+    color: var(--unity-colors-label-text);
+}
+
+/* Renewed Refresh Button (Text + Style) */
+.status-refresh-btn {
+    margin-left: 12px;
+    background-color: var(--unity-colors-button-background);
+    border-color: var(--unity-colors-button-border);
+    border-width: 1px;
+    border-radius: 4px;
+    padding: 4px 10px;
+    color: var(--unity-colors-button-text);
+    font-size: 11px;
+    -unity-font-style: normal;
+    transition: background-color 0.1s;
+    flex-shrink: 0;
+}
+
+.status-refresh-btn:hover {
+    background-color: var(--unity-colors-button-background-hover);
+    color: var(--unity-colors-button-text);
+    cursor: link;
+}
+
+.tab-toolbar {
+    flex-shrink: 0;
+}
+
+.status-refresh-btn:active {
+    background-color: var(--unity-colors-button-background-pressed);
+}
+
+.status-right {
+    flex-direction: row;
+    align-items: center;
+}
+
+.setup-hint {
+    font-size: 11px;
+    color: var(--unity-colors-label-text);
+    opacity: 0.7;
+    margin-right: 4px;
+    -unity-font-style: italic;
+}
+
+/* Renewed Toggle Arrow (Explicit Text) */
+.setup-toggle-arrow {
+    width: 28px;
+    height: 28px;
+    background-color: transparent;
+    border-width: 0;
+    font-size: 14px;
+    color: var(--unity-colors-label-text);
+    -unity-text-align: middle-center;
     border-radius: 4px;
 }
 
-/* Tabs */
-.tab-toolbar {
-    margin-bottom: 8px;
+.setup-toggle-arrow:hover {
+    background-color: var(--unity-colors-button-background-hover);
+    color: var(--unity-colors-button-text);
+    cursor: link;
 }
 
-.tab-toolbar .unity-toolbar-button {
-    flex-grow: 1;
+.setup-container-root {
+    background-color: var(--unity-colors-box-background);
+    border-bottom-width: 1px;
+    border-bottom-color: var(--unity-colors-app_toolbar_button-border);
+    padding: 10px;
 }
 
-/* Panels */
-.panel-scroll {
-    flex-grow: 1;
-    margin-top: 8px;
+.main-workspace {
+    padding: 10px;
 }
 
-.hidden {
-    display: none;
+.main-workspace.disabled {
+    opacity: 0.5;
 }
 
-.section-stack {
-    flex-direction: column;
+#window-root {
+    background-color: var(--unity-colors-window-background);
 }

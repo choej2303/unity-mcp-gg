@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" editor-extension-mode="False">
+    <ui:VisualElement name="log-viewer-root" class="log-viewer-root">
+        <ui:VisualElement name="log-header" class="log-header">
+            <ui:Button name="toggle-btn" text="▼" class="log-toggle-btn" />
+            <ui:Label text="Server Logs" class="log-title" />
+            <ui:VisualElement style="flex-grow: 1;" />
+            <ui:Button name="copy-btn" text="Copy All" class="log-clear-btn" style="margin-right: 5px;" />
+            <ui:Button name="clear-btn" text="Clear" class="log-clear-btn" />
+        </ui:VisualElement>
+        <ui:ScrollView name="log-scroll-view" class="log-content" mode="Vertical" horizontal-scroller-visibility="Hidden">
+            <!-- Logs will be added here dynamically -->
+        </ui:ScrollView>
+    </ui:VisualElement>
+</ui:UXML>

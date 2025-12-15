@@ -19,6 +19,11 @@ namespace MCPForUnity.Editor.Services
         int CurrentPort { get; }
 
         /// <summary>
+        /// Gets extra connection details (e.g. Pipe name, Socket path)
+        /// </summary>
+        string ConnectionDetails { get; }
+
+        /// <summary>
         /// Gets whether the bridge is in auto-connect mode
         /// </summary>
         bool IsAutoConnectMode { get; }

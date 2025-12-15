@@ -34,11 +34,11 @@ namespace MCPForUnity.Editor.Helpers
         }
 
         /// <summary>
-        /// Builds the JSON-RPC endpoint used by FastMCP clients (base + /mcp).
+        /// Builds the SSE endpoint used by MCP clients (base + /sse).
         /// </summary>
         public static string GetMcpRpcUrl()
         {
-            return AppendPathSegment(GetBaseUrl(), "mcp");
+            return AppendPathSegment(GetBaseUrl(), "sse");
         }
 
         /// <summary>
@@ -70,8 +70,12 @@ namespace MCPForUnity.Editor.Helpers
             // Remove trailing slash segments.
             trimmed = trimmed.TrimEnd('/');
 
-            // Strip trailing "/mcp" (case-insensitive) if provided.
-            if (trimmed.EndsWith("/mcp", StringComparison.OrdinalIgnoreCase))
+            // Strip trailing "/sse" or "/mcp" (case-insensitive) if provided.
+            if (trimmed.EndsWith("/sse", StringComparison.OrdinalIgnoreCase))
+            {
+                trimmed = trimmed[..^4];
+            }
+            else if (trimmed.EndsWith("/mcp", StringComparison.OrdinalIgnoreCase))
             {
                 trimmed = trimmed[..^4];
             }

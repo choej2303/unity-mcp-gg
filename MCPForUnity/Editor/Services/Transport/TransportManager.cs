@@ -20,7 +20,7 @@ namespace MCPForUnity.Editor.Services.Transport
         public TransportManager()
         {
             Configure(
-                () => new WebSocketTransportClient(MCPServiceLocator.ToolDiscovery),
+                () => new SseTransportClient(MCPServiceLocator.ToolDiscovery),
                 () => new StdioTransportClient());
         }
 
@@ -121,6 +121,14 @@ namespace MCPForUnity.Editor.Services.Transport
 
         public TransportState GetState(TransportMode mode)
         {
+            var client = GetClient(mode);
+            if (client != null)
+            {
+                // Always return the live state from the client if available
+                return client.State ?? TransportState.Disconnected(client.TransportName, "Initializing...");
+            }
+
+            // Fallback to cached state if client is not instantiated
             return mode switch
             {
                 TransportMode.Http => _httpState,
@@ -129,7 +137,18 @@ namespace MCPForUnity.Editor.Services.Transport
             };
         }
 
-        public bool IsRunning(TransportMode mode) => GetState(mode).IsConnected;
+        public bool IsRunning(TransportMode mode) 
+        {
+            try
+            {
+                var client = GetClient(mode);
+                return client != null && client.IsConnected;
+            }
+            catch
+            {
+                return false;
+            }
+        }
 
         private void UpdateState(TransportMode mode, TransportState state)
         {
@@ -143,6 +162,14 @@ namespace MCPForUnity.Editor.Services.Transport
                     break;
                 default:
                     throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unsupported transport mode");
+            }
+        }
+        public async Task SendNotificationAsync(TransportMode mode, string method, Newtonsoft.Json.Linq.JObject parameters)
+        {
+            IMcpTransportClient client = GetClient(mode);
+            if (client != null && client.IsConnected)
+            {
+                await client.SendNotificationAsync(method, parameters);
             }
         }
     }

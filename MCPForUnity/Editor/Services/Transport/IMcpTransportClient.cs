@@ -14,5 +14,7 @@ namespace MCPForUnity.Editor.Services.Transport
         Task<bool> StartAsync();
         Task StopAsync();
         Task<bool> VerifyAsync();
+        
+        Task SendNotificationAsync(string method, Newtonsoft.Json.Linq.JObject parameters);
     }
 }

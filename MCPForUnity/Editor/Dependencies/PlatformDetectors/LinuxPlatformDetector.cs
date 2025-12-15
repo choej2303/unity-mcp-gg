@@ -16,7 +16,7 @@ namespace MCPForUnity.Editor.Dependencies.PlatformDetectors
 
         public override bool CanDetect => RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
 
-        public override DependencyStatus DetectPython()
+        public override DependencyStatus DetectPython(string overridePath = null)
         {
             var status = new DependencyStatus("Python", isRequired: true)
             {
@@ -25,6 +25,23 @@ namespace MCPForUnity.Editor.Dependencies.PlatformDetectors
 
             try
             {
+                // 1. Check Override
+                if (overridePath == null)
+                {
+                    try { overridePath = UnityEditor.EditorPrefs.GetString(MCPForUnity.Editor.Constants.EditorPrefKeys.PythonPathOverride, ""); } catch {}
+                }
+
+                if (!string.IsNullOrEmpty(overridePath) && File.Exists(overridePath))
+                {
+                    if (TryValidatePython(overridePath, out string ovVersion, out string ovPath))
+                    {
+                        status.IsAvailable = true;
+                        status.Version = ovVersion;
+                        status.Path = ovPath;
+                        status.Details = $"Using custom Python path: {ovPath}";
+                        return status;
+                    }
+                }
                 // Try running python directly first
                 if (TryValidatePython("python3", out string version, out string fullPath) ||
                     TryValidatePython("python", out version, out fullPath))
@@ -51,7 +68,7 @@ namespace MCPForUnity.Editor.Dependencies.PlatformDetectors
                 }
 
                 status.ErrorMessage = "Python not found in PATH";
-                status.Details = "Install Python 3.10+ and ensure it's added to PATH.";
+                status.Details = "Install python 3.11+ and ensure it's added to PATH.";
             }
             catch (Exception ex)
             {
@@ -90,7 +107,7 @@ namespace MCPForUnity.Editor.Dependencies.PlatformDetectors
 Note: Make sure ~/.local/bin is in your PATH for user-local installations.";
         }
 
-        public override DependencyStatus DetectUv()
+        public override DependencyStatus DetectUv(string overridePath = null)
         {
             var status = new DependencyStatus("uv Package Manager", isRequired: true)
             {
@@ -99,6 +116,24 @@ Note: Make sure ~/.local/bin is in your PATH for user-local installations.";
 
             try
             {
+                // 0. Check Override
+                if (overridePath == null)
+                {
+                    try { overridePath = UnityEditor.EditorPrefs.GetString(MCPForUnity.Editor.Constants.EditorPrefKeys.UvPathOverride, ""); } catch {}
+                }
+
+                if (!string.IsNullOrEmpty(overridePath) && File.Exists(overridePath))
+                {
+                    if (TryValidateUv(overridePath, out string ovVersion, out string ovPath))
+                    {
+                        status.IsAvailable = true;
+                        status.Version = ovVersion;
+                        status.Path = ovPath;
+                        status.Details = $"Using custom uv path: {ovPath}";
+                        return status;
+                    }
+                }
+
                 // Try running uv/uvx directly with augmented PATH
                 if (TryValidateUv("uv", out string version, out string fullPath) ||
                     TryValidateUv("uvx", out version, out fullPath))
@@ -140,55 +175,22 @@ Note: Make sure ~/.local/bin is in your PATH for user-local installations.";
             version = null;
             fullPath = null;
 
-            try
+            var env = new System.Collections.Generic.Dictionary<string, string>
             {
-                var psi = new ProcessStartInfo
+                ["PATH"] = BuildAugmentedPath()
+            };
+
+            if (TryExecuteProcess(pythonPath, "--version", 5000, out string output, env) && output.StartsWith("Python "))
+            {
+                version = output.Substring(7); // Remove "Python " prefix
+                fullPath = pythonPath;
+
+                // Validate minimum version (Python 4+ or python 3.10+)
+                if (TryParseVersion(version, out var major, out var minor))
                 {
-                    FileName = pythonPath,
-                    Arguments = "--version",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                };
-
-                // Set PATH to include common locations
-                var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                var pathAdditions = new[]
-                {
-                    "/usr/local/bin",
-                    "/usr/bin",
-                    "/bin",
-                    "/snap/bin",
-                    Path.Combine(homeDir, ".local", "bin")
-                };
-
-                string currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
-                psi.EnvironmentVariables["PATH"] = string.Join(":", pathAdditions) + ":" + currentPath;
-
-                using var process = Process.Start(psi);
-                if (process == null) return false;
-
-                string output = process.StandardOutput.ReadToEnd().Trim();
-                process.WaitForExit(5000);
-
-                if (process.ExitCode == 0 && output.StartsWith("Python "))
-                {
-                    version = output.Substring(7); // Remove "Python " prefix
-                    fullPath = pythonPath;
-
-                    // Validate minimum version (Python 4+ or Python 3.10+)
-                    if (TryParseVersion(version, out var major, out var minor))
-                    {
-                        return major > 3 || (major >= 3 && minor >= 10);
-                    }
+                    return major > 3 || (major >= 3 && minor >= 10);
                 }
             }
-            catch
-            {
-                // Ignore validation errors
-            }
-
             return false;
         }
 
@@ -197,38 +199,17 @@ Note: Make sure ~/.local/bin is in your PATH for user-local installations.";
             version = null;
             fullPath = null;
 
-            try
+            var env = new System.Collections.Generic.Dictionary<string, string>
             {
-                var psi = new ProcessStartInfo
-                {
-                    FileName = uvPath,
-                    Arguments = "--version",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                };
+                ["PATH"] = BuildAugmentedPath()
+            };
 
-                psi.EnvironmentVariables["PATH"] = BuildAugmentedPath();
-
-                using var process = Process.Start(psi);
-                if (process == null) return false;
-
-                string output = process.StandardOutput.ReadToEnd().Trim();
-                process.WaitForExit(5000);
-
-                if (process.ExitCode == 0 && output.StartsWith("uv "))
-                {
-                    version = output.Substring(3).Trim();
-                    fullPath = uvPath;
-                    return true;
-                }
-            }
-            catch
+            if (TryExecuteProcess(uvPath, "--version", 5000, out string output, env) && output.StartsWith("uv "))
             {
-                // Ignore validation errors
+                version = output.Substring(3).Trim();
+                fullPath = uvPath;
+                return true;
             }
-
             return false;
         }
 
@@ -255,49 +236,20 @@ Note: Make sure ~/.local/bin is in your PATH for user-local installations.";
         {
             fullPath = null;
 
-            try
+            var env = new System.Collections.Generic.Dictionary<string, string>
             {
-                var psi = new ProcessStartInfo
-                {
-                    FileName = "/usr/bin/which",
-                    Arguments = executable,
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                };
+                ["PATH"] = BuildAugmentedPath()
+            };
 
-                // Enhance PATH for Unity's GUI environment
-                var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                var pathAdditions = new[]
-                {
-                    "/usr/local/bin",
-                    "/usr/bin",
-                    "/bin",
-                    "/snap/bin",
-                    Path.Combine(homeDir, ".local", "bin")
-                };
-
-                string currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
-                psi.EnvironmentVariables["PATH"] = string.Join(":", pathAdditions) + ":" + currentPath;
-
-                using var process = Process.Start(psi);
-                if (process == null) return false;
-
-                string output = process.StandardOutput.ReadToEnd().Trim();
-                process.WaitForExit(3000);
-
-                if (process.ExitCode == 0 && !string.IsNullOrEmpty(output) && File.Exists(output))
+             // uses 'which' to find the executable path
+            if (TryExecuteProcess("/usr/bin/which", executable, 3000, out string output, env))
+            {
+                if (!string.IsNullOrEmpty(output) && File.Exists(output))
                 {
                     fullPath = output;
                     return true;
                 }
             }
-            catch
-            {
-                // Ignore errors
-            }
-
             return false;
         }
     }
