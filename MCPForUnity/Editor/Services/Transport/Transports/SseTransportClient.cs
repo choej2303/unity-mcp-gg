@@ -220,8 +220,22 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             // Extract session ID from query
             if (Uri.TryCreate(_postEndpoint, UriKind.Absolute, out var epUri))
             {
-                var query = System.Web.HttpUtility.ParseQueryString(epUri.Query);
-                _sessionId = query["session_id"];
+                // Manual query parsing to avoid System.Web dependency
+                string queryString = epUri.Query;
+                if (!string.IsNullOrEmpty(queryString))
+                {
+                    if (queryString.StartsWith("?")) queryString = queryString.Substring(1);
+                    var parts = queryString.Split('&');
+                    foreach (var part in parts)
+                    {
+                        var kv = part.Split('=');
+                        if (kv.Length == 2 && kv[0] == "session_id")
+                        {
+                            _sessionId = Uri.UnescapeDataString(kv[1]);
+                            break;
+                        }
+                    }
+                }
 
                 if (!string.IsNullOrEmpty(_sessionId))
                 {
