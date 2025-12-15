@@ -146,7 +146,7 @@ namespace MCPForUnity.Editor.Windows
                 var connectionRoot = connectionTree.Instantiate();
                 connectionPlaceholder.Add(connectionRoot);
                 connectionSection = new McpConnectionSection(connectionRoot);
-                connectionSection.OnManualConfigUpdateRequested += () => clientConfigSection?.UpdateManualConfiguration();
+                connectionSection.OnManualConfigUpdateRequested += () => clientConfigSection?.RefreshSelectedClient();
             }
 
             // 4. Client Config Section

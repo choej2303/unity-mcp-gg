@@ -241,7 +241,8 @@ namespace MCPForUnity.Editor.Clients
                 }
                 else
                 {
-                    client.SetStatus(McpStatus.IncorrectPath);
+                    // Configuration exists but does not match expected values (e.g. transport changed)
+                    client.SetStatus(McpStatus.NotConfigured);
                 }
             }
             catch (Exception ex)
@@ -359,7 +360,8 @@ namespace MCPForUnity.Editor.Clients
                 }
                 else
                 {
-                    client.SetStatus(McpStatus.IncorrectPath);
+                    // Configuration exists but does not match expected values (e.g. transport changed)
+                    client.SetStatus(McpStatus.NotConfigured);
                 }
             }
             catch (Exception ex)
