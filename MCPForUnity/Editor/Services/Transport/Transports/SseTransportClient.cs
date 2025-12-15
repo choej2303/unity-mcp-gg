@@ -19,11 +19,11 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
     /// <summary>
     /// Implements the standard MCP HTTP Transport using Server-Sent Events (SSE).
     /// Connects to /sse for events and POSTs to the received endpoint for messages.
+    /// Refactored to use SseEventReader and McpJsonRpcFactory.
     /// </summary>
     public class SseTransportClient : IMcpTransportClient, IDisposable
     {
         private const string TransportDisplayName = "http (sse)";
-        private static readonly TimeSpan DefaultCommandTimeout = TimeSpan.FromSeconds(30);
 
         private readonly IToolDiscoveryService _toolDiscoveryService;
         private readonly HttpClient _httpClient;
@@ -39,6 +39,8 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
         private TransportState _state = TransportState.Disconnected(TransportDisplayName, "Transport not started");
         private bool _disposed;
 
+        private TaskCompletionSource<bool> _connectionTcs;
+
         public SseTransportClient(IToolDiscoveryService toolDiscoveryService = null)
         {
             _toolDiscoveryService = toolDiscoveryService;
@@ -50,7 +52,6 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
         public string TransportName => TransportDisplayName;
         public TransportState State => _state;
 
-        private TaskCompletionSource<bool> _connectionTcs;
 
         public async Task<bool> StartAsync()
         {
@@ -74,7 +75,6 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                     return true;
                 }
                 
-                // Timeout or failure during startup
                 McpLog.Warn("[SSE] Startup timed out or failed to connect.");
                 return false;
             }
@@ -85,8 +85,6 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             }
         }
 
-        private HttpResponseMessage _currentResponse;
-
         public async Task StopAsync()
         {
             if (_lifecycleCts != null)
@@ -96,18 +94,11 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                 _lifecycleCts = null;
             }
 
-            // Force close the stream to unblock ReadLineAsync immediately
-            if (_currentResponse != null)
-            {
-                try { _currentResponse.Dispose(); } catch { }
-                _currentResponse = null;
-            }
-
+            // Clean up receive task
             if (_receiveTask != null)
             {
                 try 
                 { 
-                    // Wait with a short timeout to ensure we don't block the UI thread forever
                     await Task.WhenAny(_receiveTask, Task.Delay(1000)).ConfigureAwait(false);
                 } 
                 catch { }
@@ -121,7 +112,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
 
         public Task<bool> VerifyAsync()
         {
-            return Task.FromResult(_isConnected && !string.IsNullOrEmpty(_postEndpoint));
+             return Task.FromResult(_isConnected && !string.IsNullOrEmpty(_postEndpoint));
         }
 
         public void Dispose()
@@ -134,8 +125,6 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
 
         private async Task ReceiveLoopAsync(CancellationToken token)
         {
-            // FastMCP server URL says .../mcp, and /mcp gave 400 (Msg endpoint).
-            // FastMCP server with transport='sse' defaults to /sse
             string sseUrl = $"{_baseUrl.TrimEnd('/')}/sse";
             McpLog.Info($"[SSE] Connecting to {sseUrl}...");
 
@@ -144,64 +133,37 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                 using var request = new HttpRequestMessage(HttpMethod.Get, sseUrl);
                 request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("text/event-stream"));
 
-                // We don't use 'using' here because we need to dispose it in StopAsync to unblock
-                _currentResponse = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
-                
-                if (!_currentResponse.IsSuccessStatusCode)
+                // Note: We deliberately do NOT dispose this response inside the 'using' block 
+                // because we need the stream to stay open until StopAsync is called or cancellation happens.
+                // However, we wrap the processing in a try/finally to ensure disposal upon exit.
+                using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+
+                if (!response.IsSuccessStatusCode)
                 {
-                    string errorContent = await _currentResponse.Content.ReadAsStringAsync();
-                    McpLog.Error($"[SSE] Connection failed with status {_currentResponse.StatusCode}: {errorContent}");
+                    string errorContent = await response.Content.ReadAsStringAsync();
+                    McpLog.Error($"[SSE] Connection failed with status {response.StatusCode}: {errorContent}");
                     _connectionTcs?.TrySetResult(false);
                     return;
                 }
 
-                // response.EnsureSuccessStatusCode(); // Handled manually above
-
-                using var stream = await _currentResponse.Content.ReadAsStreamAsync().ConfigureAwait(false);
-                using var reader = new StreamReader(stream, Encoding.UTF8);
+                using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+                using var sseReader = new SseEventReader(stream);
 
                 McpLog.Info("[SSE] Stream connected.");
                 _isConnected = true;
                 _state = TransportState.Connected(TransportDisplayName, sessionId: "negotiating...", details: sseUrl);
                 _connectionTcs?.TrySetResult(true);
 
-                string currentEvent = null;
-
-                while (!reader.EndOfStream && !token.IsCancellationRequested)
+                while (!token.IsCancellationRequested)
                 {
-                    string line = null;
-                    try 
+                    var evt = await sseReader.ReadNextEventAsync(token);
+                    if (evt.IsEmpty)
                     {
-                        line = await reader.ReadLineAsync().ConfigureAwait(false);
-                    }
-                    catch (ObjectDisposedException) 
-                    {
-                        // Normal shutdown when StopAsync disposes the stream
+                        // End of stream or broken pipe
                         break;
                     }
-                    catch (IOException)
-                    {
-                         // Normal shutdown
-                         break;
-                    }
 
-                    if (line == null) break;
-
-                    if (string.IsNullOrWhiteSpace(line))
-                    {
-                        continue;
-                    }
-
-                    if (line.StartsWith("event:"))
-                    {
-                        currentEvent = line.Substring("event:".Length).Trim();
-                    }
-                    else if (line.StartsWith("data:"))
-                    {
-                        string data = line.Substring("data:".Length).Trim();
-                        await ProcessEventAsync(currentEvent, data, token).ConfigureAwait(false);
-                        currentEvent = null;
-                    }
+                    await ProcessEventAsync(evt.EventName, evt.Data, token).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException)
@@ -210,24 +172,17 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             }
             catch (Exception ex)
             {
-                // Ignore errors if we are intentionally stopping
                 if (!token.IsCancellationRequested)
                 {
-                    McpLog.Warn($"[SSE] Disconnected: {ex.Message}");
+                     McpLog.Warn($"[SSE] Disconnected: {ex.Message}");
                     _state = _state.WithError(ex.Message);
                     _connectionTcs?.TrySetResult(false);
                 }
             }
             finally
             {
-                if (_currentResponse != null)
-                {
-                    try { _currentResponse.Dispose(); } catch { }
-                    _currentResponse = null;
-                }
-
                 _isConnected = false;
-                if (_state.Error == null) // Fixed: Accessing Error instead of Status
+                if (_state.Error == null)
                 {
                     _state = TransportState.Disconnected(TransportDisplayName);
                 }
@@ -241,51 +196,41 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             switch (eventName)
             {
                 case "endpoint":
-                    if (Uri.TryCreate(data, UriKind.Absolute, out _))
-                    {
-                        _postEndpoint = data;
-                    }
-                    else
-                    {
-                        var baseUri = new Uri(_baseUrl);
-                        var newUri = new Uri(baseUri, data);
-                        _postEndpoint = newUri.ToString();
-                    }
-
-                    if (Uri.TryCreate(_postEndpoint, UriKind.Absolute, out var epUri))
-                    {
-                        string query = epUri.Query;
-                        // Fixed: Manual query parsing
-                        if (query.Length > 1)
-                        {
-                             var parts = query.Substring(1).Split('&');
-                             foreach (var p in parts)
-                             {
-                                 var kv = p.Split('=');
-                                 if (kv.Length == 2 && kv[0] == "session_id")
-                                 {
-                                     _sessionId = Uri.UnescapeDataString(kv[1]);
-                                     break;
-                                 }
-                             }
-                        }
-
-                        if (!string.IsNullOrEmpty(_sessionId))
-                        {
-                            ProjectIdentityUtility.SetSessionId(_sessionId);
-                            _state = TransportState.Connected(TransportDisplayName, sessionId: _sessionId, details: _postEndpoint);
-                            McpLog.Info($"[SSE] Endpoint received: {_postEndpoint}");
-                            await SendRegisterToolsAsync(token).ConfigureAwait(false);
-                        }
-                    }
+                    HandleEndpointEvent(data, token);
                     break;
-
                 case "message":
                     await HandleMessageAsync(data, token).ConfigureAwait(false);
                     break;
-                
-                default:
-                    break;
+            }
+        }
+
+        private void HandleEndpointEvent(string data, CancellationToken token)
+        {
+            if (Uri.TryCreate(data, UriKind.Absolute, out _))
+            {
+                _postEndpoint = data;
+            }
+            else
+            {
+                var baseUri = new Uri(_baseUrl);
+                var newUri = new Uri(baseUri, data);
+                _postEndpoint = newUri.ToString();
+            }
+
+            // Extract session ID from query
+            if (Uri.TryCreate(_postEndpoint, UriKind.Absolute, out var epUri))
+            {
+                var query = System.Web.HttpUtility.ParseQueryString(epUri.Query);
+                _sessionId = query["session_id"];
+
+                if (!string.IsNullOrEmpty(_sessionId))
+                {
+                    ProjectIdentityUtility.SetSessionId(_sessionId);
+                    _state = TransportState.Connected(TransportDisplayName, sessionId: _sessionId, details: _postEndpoint);
+                    McpLog.Info($"[SSE] Endpoint received: {_postEndpoint}");
+                    // Fire and forget initialization
+                    _ = SendRegisterToolsAsync(token);
+                }
             }
         }
 
@@ -296,13 +241,11 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             {
                 payload = JObject.Parse(json);
             }
-            catch
-            {
-                return; 
-            }
+            catch { return; }
 
             string method = payload.Value<string>("method");
             
+            // Dispatch known protocol messages
             if (string.Equals(method, "tools/call", StringComparison.OrdinalIgnoreCase) || 
                 string.Equals(method, "notifications/message", StringComparison.OrdinalIgnoreCase)) 
             {
@@ -318,6 +261,10 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             
             if (string.IsNullOrEmpty(toolName) || string.IsNullOrEmpty(id)) return;
 
+            // Execute the tool (Inter-service communication)
+            // We still depend on TransportCommandDispatcher for now; refactoring this "Dispatcher" is a separate task.
+            // However, we construct the request/response using our Factory.
+            
             var internalEnvelope = new JObject
             {
                 ["type"] = toolName,
@@ -325,6 +272,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             };
 
             string responseJson;
+            bool isError = false;
             try 
             {
                 responseJson = await TransportCommandDispatcher.ExecuteCommandJsonAsync(internalEnvelope.ToString(Formatting.None), token).ConfigureAwait(false);
@@ -332,52 +280,28 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             catch (Exception ex)
             {
                 responseJson = JsonConvert.SerializeObject(new { error = ex.Message });
+                isError = true;
             }
 
-            JObject internalResult;
-            try { internalResult = JObject.Parse(responseJson); } 
-            catch { internalResult = new JObject(); }
-
-            var rpcResponse = new JObject
+            // Parse result to get inner text
+            string resultText;
+            try 
             {
-                ["jsonrpc"] = "2.0",
-                ["id"] = id,
-                ["result"] = new JObject
-                {
-                    ["content"] = new JArray 
-                    { 
-                        new JObject 
-                        { 
-                            ["type"] = "text", 
-                            ["text"] = internalResult.ToString(Formatting.None) 
-                        } 
-                    },
-                    ["isError"] = internalResult["status"]?.ToString() == "error"
-                }
-            };
+                var internalResult = JObject.Parse(responseJson);
+                resultText = internalResult.ToString(Formatting.None);
+                if (internalResult["status"]?.ToString() == "error") isError = true;
+            } 
+            catch { resultText = "{}"; }
+
+            // Construct standard MCP response
+            var rpcResponse = McpJsonRpcFactory.CreateToolCallResult(id, resultText, isError);
             
             await SendJsonAsync(rpcResponse, token).ConfigureAwait(false);
         }
 
         private async Task SendRegisterToolsAsync(CancellationToken token)
         {
-             var initRequest = new JObject
-             {
-                ["jsonrpc"] = "2.0",
-                ["id"] = Guid.NewGuid().ToString(),
-                ["method"] = "initialize",
-                ["params"] = new JObject
-                {
-                    ["protocolVersion"] = "2024-11-05",
-                    ["capabilities"] = new JObject(),
-                    ["clientInfo"] = new JObject
-                    {
-                        ["name"] = "UnityMCP",
-                        ["version"] = Application.unityVersion
-                    }
-                }
-             };
-             
+             var initRequest = McpJsonRpcFactory.CreateInitializeRequest();
              await SendJsonAsync(initRequest, token).ConfigureAwait(false);
         }
 
@@ -392,32 +316,8 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
         
         public Task SendNotificationAsync(string method, JObject parameters)
         {
-            var notification = new JObject
-            {
-                ["jsonrpc"] = "2.0",
-                ["method"] = method,
-                ["params"] = parameters ?? new JObject()
-            };
+            var notification = McpJsonRpcFactory.CreateNotification(method, parameters);
             return SendJsonAsync(notification, _lifecycleCts?.Token ?? CancellationToken.None);
-        }
-
-        // Fixed: Removed 'async' to fix CS1998
-        private Task<List<ToolMetadata>> GetEnabledToolsOnMainThreadAsync(CancellationToken token)
-        {
-            var tcs = new TaskCompletionSource<List<ToolMetadata>>();
-             var registration = token.Register(() => tcs.TrySetCanceled());
-             EditorApplication.delayCall += () =>
-             {
-                 try
-                 {
-                     if (tcs.Task.IsCompleted) return;
-                     var tools = _toolDiscoveryService?.GetEnabledTools() ?? new List<ToolMetadata>();
-                     tcs.TrySetResult(tools);
-                 }
-                 catch (Exception ex) { tcs.TrySetException(ex); }
-                 finally { registration.Dispose(); }
-             };
-             return tcs.Task;
         }
     }
 }
