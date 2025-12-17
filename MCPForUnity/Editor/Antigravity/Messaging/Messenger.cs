@@ -16,6 +16,28 @@ namespace Google.Unity.Antigravity.Editor.Messaging
 		private readonly UdpSocket _socket;
 		private readonly object _disposeLock = new object();
 		private bool _disposed;
+        
+        // Simple thread-safe buffer pool to reduce GC on high-frequency UDP receives
+        private static readonly System.Collections.Generic.Stack<byte[]> _bufferPool = new System.Collections.Generic.Stack<byte[]>();
+        private static readonly object _poolLock = new object();
+
+        private static byte[] RentBuffer() 
+        {
+            lock (_poolLock) 
+            {
+                if (_bufferPool.Count > 0) return _bufferPool.Pop();
+            }
+            return new byte[UdpSocket.BufferSize];
+        }
+
+        private static void ReturnBuffer(byte[] buffer)
+        {
+            if (buffer == null || buffer.Length != UdpSocket.BufferSize) return;
+            lock (_poolLock)
+            {
+                _bufferPool.Push(buffer);
+            }
+        }
 
 #if UNITY_EDITOR_WIN
 		[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
@@ -49,7 +71,7 @@ namespace Google.Unity.Antigravity.Editor.Messaging
 
 		private void BeginReceiveMessage()
 		{
-			var buffer = new byte[UdpSocket.BufferSize];
+			var buffer = RentBuffer();
 			var any = UdpSocket.Any();
 
 			try
@@ -87,7 +109,12 @@ namespace Google.Unity.Antigravity.Editor.Messaging
 					_socket.EndReceiveFrom(result, ref endPoint);
 				}
 
-				var message = DeserializeMessage(UdpSocket.BufferFor(result));
+                var buffer = UdpSocket.BufferFor(result);
+				var message = DeserializeMessage(buffer);
+                
+                // Return buffer to pool now that we've deserialized (copied) strings from it.
+                ReturnBuffer(buffer);
+
 				if (message != null)
 				{
 					message.Origin = (IPEndPoint)endPoint;
@@ -95,9 +122,9 @@ namespace Google.Unity.Antigravity.Editor.Messaging
 					if (IsValidTcpMessage(message, out var port, out var bufferSize))
 					{
 						// switch to TCP mode to handle big messages
-						TcpClient.Queue(message.Origin.Address, port, bufferSize, buffer =>
+						TcpClient.Queue(message.Origin.Address, port, bufferSize, outputBuffer =>
 						{
-							var originalMessage = DeserializeMessage(buffer);
+							var originalMessage = DeserializeMessage(outputBuffer);
 							originalMessage.Origin = message.Origin;
 							ReceiveMessage?.Invoke(this, new MessageEventArgs(originalMessage));
 						});

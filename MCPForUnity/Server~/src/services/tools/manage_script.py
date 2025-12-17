@@ -12,6 +12,7 @@ import transport.legacy.unity_connection
 
 
 from services.tools.utils import split_uri
+import bisect
 
 
 @mcp_for_unity_tool(description=(
@@ -80,15 +81,19 @@ async def apply_text_edits(
                 contents = contents or ""
 
         # Helper to map 0-based character index to 1-based line/col
+        # Optimization: Precompute line starts for O(log L) lookup via bisect
+        line_starts = [0]
+        for i, char in enumerate(contents):
+            if char == '\n':
+                line_starts.append(i + 1)
+        
         def line_col_from_index(idx: int) -> tuple[int, int]:
             if idx <= 0:
                 return 1, 1
-            # Count lines up to idx and position within line
-            nl_count = contents.count("\n", 0, idx)
-            line = nl_count + 1
-            last_nl = contents.rfind("\n", 0, idx)
-            col = (idx - (last_nl + 1)) + 1 if last_nl >= 0 else idx + 1
-            return line, col
+            # Bisect right to find insertion point
+            line_idx = bisect.bisect_right(line_starts, idx)
+            line_start = line_starts[line_idx - 1]
+            return line_idx, (idx - line_start) + 1
 
         for e in edits or []:
             e2 = dict(e)

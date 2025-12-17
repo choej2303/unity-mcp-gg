@@ -116,6 +116,11 @@ namespace Google.Unity.Antigravity.Editor
 			sb?.Append(data);
 		}
 
+		private static string[] _cachedWorkspaces;
+		private static DateTime _lastCacheTime;
+		private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(1);
+		private static readonly object _cacheLock = new object();
+
 		public static string[] GetProcessWorkspaces(Process process)
 		{
 			if (process == null)
@@ -199,7 +204,13 @@ namespace Google.Unity.Antigravity.Editor
 					Debug.LogWarning($"[Cursor] Workspace storage directory not found: {cursorStoragePath}");
 				}
 
-				return workspaces.Distinct().ToArray();
+				lock (_cacheLock)
+				{
+					_cachedWorkspaces = workspaces.Distinct().ToArray();
+					_lastCacheTime = DateTime.Now;
+
+					return _cachedWorkspaces;
+				}
 			}
 			catch (Exception ex)
 			{
