@@ -1,337 +1,118 @@
 using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Net.Http;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using MCPForUnity.Editor.Config;
 using MCPForUnity.Editor.Helpers;
-using MCPForUnity.Editor.Services;
-using MCPForUnity.Editor.Services.Transport;
-using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using UnityEditor;
-using UnityEngine;
 
 namespace MCPForUnity.Editor.Services.Transport.Transports
 {
     /// <summary>
     /// Implements the standard MCP HTTP Transport using Server-Sent Events (SSE).
-    /// Connects to /sse for events and POSTs to the received endpoint for messages.
-    /// Refactored to use SseEventReader and McpJsonRpcFactory.
+    /// Acts as a legacy adapter (facade) for the new McpSession architecture.
     /// </summary>
     public class SseTransportClient : IMcpTransportClient, IDisposable
     {
         private const string TransportDisplayName = "http (sse)";
 
-        private readonly IToolDiscoveryService _toolDiscoveryService;
-        private readonly HttpClient _httpClient;
+        private readonly SseTransport _transport;
+        private readonly McpSession _session;
+        private readonly UnityMcpCommandExecutor _executor;
         
-        private CancellationTokenSource _lifecycleCts;
-        private Task _receiveTask;
-        
-        private string _baseUrl;
-        private string _postEndpoint;
-        private string _sessionId;
-        
-        private volatile bool _isConnected;
+        // We keep track of connection state for the interface
         private TransportState _state = TransportState.Disconnected(TransportDisplayName, "Transport not started");
         private bool _disposed;
 
-        private TaskCompletionSource<bool> _connectionTcs;
-
         public SseTransportClient(IToolDiscoveryService toolDiscoveryService = null)
         {
-            _toolDiscoveryService = toolDiscoveryService;
-            _httpClient = new HttpClient();
-            _httpClient.Timeout = Timeout.InfiniteTimeSpan;
+            // Note: toolDiscoveryService is not used directly here anymore, 
+            // as command execution is handled by UnityMcpCommandExecutor (which uses CommandRegistry).
+            
+            _transport = new SseTransport();
+            _executor = new UnityMcpCommandExecutor();
+            _session = new McpSession(_transport, _executor);
+
+            _session.OnSessionError += error =>
+            {
+                _state = _state.WithError(error);
+            };
         }
 
-        public bool IsConnected => _isConnected;
+        public bool IsConnected => _session.IsConnected;
         public string TransportName => TransportDisplayName;
         public TransportState State => _state;
 
-
         public async Task<bool> StartAsync()
         {
-            await StopAsync();
-
-            _lifecycleCts = new CancellationTokenSource();
-            _baseUrl = HttpEndpointUtility.GetBaseUrl();
-            _sessionId = null;
-            _postEndpoint = null;
-            _connectionTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
             try
             {
-                _receiveTask = ReceiveLoopAsync(_lifecycleCts.Token);
+                // Connect
+                await _session.ConnectAsync();
                 
-                // Wait for connection or timeout
-                var completedTask = await Task.WhenAny(_connectionTcs.Task, Task.Delay(TimeSpan.FromSeconds(5)));
-                
-                if (completedTask == _connectionTcs.Task && _connectionTcs.Task.Result)
+                if (_session.IsConnected)
                 {
+                    _state = TransportState.Connected(TransportDisplayName);
+                    
+                    // Send initialization handshake
+                    // In the original code, this was done inside HandleEndpointEvent -> SendRegisterToolsAsync
+                    // Now we do it explicitly after connection.
+                    await SendRegisterToolsAsync();
+                    
                     return true;
                 }
                 
-                McpLog.Warn("[SSE] Startup timed out or failed to connect.");
                 return false;
             }
             catch (Exception ex)
             {
-                McpLog.Error($"[SSE] Start failed: {ex.Message}");
+                McpLog.Error($"[SseTransportClient] Start failed: {ex.Message}");
+                _state = TransportState.Disconnected(TransportDisplayName, ex.Message);
                 return false;
             }
         }
 
         public async Task StopAsync()
         {
-            if (_lifecycleCts != null)
-            {
-                _lifecycleCts.Cancel();
-                _lifecycleCts.Dispose();
-                _lifecycleCts = null;
-            }
-
-            // Clean up receive task
-            if (_receiveTask != null)
-            {
-                try 
-                { 
-                    await Task.WhenAny(_receiveTask, Task.Delay(1000)).ConfigureAwait(false);
-                } 
-                catch { }
-                _receiveTask = null;
-            }
-
-            _isConnected = false;
+            await _session.DisconnectAsync();
             _state = TransportState.Disconnected(TransportDisplayName);
-            _postEndpoint = null;
         }
 
         public Task<bool> VerifyAsync()
         {
-             return Task.FromResult(_isConnected && !string.IsNullOrEmpty(_postEndpoint));
+             return Task.FromResult(IsConnected);
+        }
+
+        // Facade for sending notifications
+        public async Task SendNotificationAsync(string method, JObject parameters)
+        {
+            await _session.SendNotificationAsync(method, parameters);
+        }
+        
+        private async Task SendRegisterToolsAsync()
+        {
+             // McpJsonRpcFactory is still used helper
+             var initRequest = McpJsonRpcFactory.CreateInitializeRequest();
+             // We can use SendRequestAsync because McpSession handles the response correlation (even if we ignore result)
+             // Or if existing server expects request but returns void/ack? 
+             // The original code used SendJsonAsync (fire and forget for this specific call?).
+             // Let's use SendRequest so we know if it failed.
+             
+             // Wait, original was: SendJsonAsync(initRequest, token)
+             // Initialize is a request, so it expects a response.
+             try 
+             {
+                await _session.SendRequestAsync("initialize", initRequest["params"] as JObject);
+             }
+             catch(Exception ex)
+             {
+                 McpLog.Warn($"[SseTransportClient] Initialize warning: {ex.Message}");
+             }
         }
 
         public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
-            StopAsync().GetAwaiter().GetResult();
-            _httpClient.Dispose();
-        }
-
-        private async Task ReceiveLoopAsync(CancellationToken token)
-        {
-            string sseUrl = $"{_baseUrl.TrimEnd('/')}/sse";
-            McpLog.Info($"[SSE] Connecting to {sseUrl}...");
-
-            try
-            {
-                using var request = new HttpRequestMessage(HttpMethod.Get, sseUrl);
-                request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("text/event-stream"));
-
-                // Note: We deliberately do NOT dispose this response inside the 'using' block 
-                // because we need the stream to stay open until StopAsync is called or cancellation happens.
-                // However, we wrap the processing in a try/finally to ensure disposal upon exit.
-                using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    string errorContent = await response.Content.ReadAsStringAsync();
-                    McpLog.Error($"[SSE] Connection failed with status {response.StatusCode}: {errorContent}");
-                    _connectionTcs?.TrySetResult(false);
-                    return;
-                }
-
-                using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-                using var sseReader = new SseEventReader(stream);
-
-                McpLog.Info("[SSE] Stream connected.");
-                _isConnected = true;
-                _state = TransportState.Connected(TransportDisplayName, sessionId: "negotiating...", details: sseUrl);
-                _connectionTcs?.TrySetResult(true);
-
-                while (!token.IsCancellationRequested)
-                {
-                    var evt = await sseReader.ReadNextEventAsync(token);
-                    if (evt.IsEmpty)
-                    {
-                        // End of stream or broken pipe
-                        break;
-                    }
-
-                    await ProcessEventAsync(evt.EventName, evt.Data, token).ConfigureAwait(false);
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                _connectionTcs?.TrySetCanceled();
-            }
-            catch (Exception ex)
-            {
-                if (!token.IsCancellationRequested)
-                {
-                     McpLog.Warn($"[SSE] Disconnected: {ex.Message}");
-                    _state = _state.WithError(ex.Message);
-                    _connectionTcs?.TrySetResult(false);
-                }
-            }
-            finally
-            {
-                _isConnected = false;
-                if (_state.Error == null)
-                {
-                    _state = TransportState.Disconnected(TransportDisplayName);
-                }
-            }
-        }
-
-        private async Task ProcessEventAsync(string eventName, string data, CancellationToken token)
-        {
-            if (string.IsNullOrEmpty(eventName)) eventName = "message";
-
-            switch (eventName)
-            {
-                case "endpoint":
-                    HandleEndpointEvent(data, token);
-                    break;
-                case "message":
-                    await HandleMessageAsync(data, token).ConfigureAwait(false);
-                    break;
-            }
-        }
-
-        private void HandleEndpointEvent(string data, CancellationToken token)
-        {
-            if (Uri.TryCreate(data, UriKind.Absolute, out _))
-            {
-                _postEndpoint = data;
-            }
-            else
-            {
-                var baseUri = new Uri(_baseUrl);
-                var newUri = new Uri(baseUri, data);
-                _postEndpoint = newUri.ToString();
-            }
-
-            // Extract session ID from query
-            if (Uri.TryCreate(_postEndpoint, UriKind.Absolute, out var epUri))
-            {
-                // Manual query parsing to avoid System.Web dependency
-                string queryString = epUri.Query;
-                if (!string.IsNullOrEmpty(queryString))
-                {
-                    if (queryString.StartsWith("?")) queryString = queryString.Substring(1);
-                    var parts = queryString.Split('&');
-                    foreach (var part in parts)
-                    {
-                        var kv = part.Split('=');
-                        if (kv.Length == 2 && kv[0] == "session_id")
-                        {
-                            _sessionId = Uri.UnescapeDataString(kv[1]);
-                            break;
-                        }
-                    }
-                }
-
-                if (!string.IsNullOrEmpty(_sessionId))
-                {
-                    ProjectIdentityUtility.SetSessionId(_sessionId);
-                    _state = TransportState.Connected(TransportDisplayName, sessionId: _sessionId, details: _postEndpoint);
-                    McpLog.Info($"[SSE] Endpoint received: {_postEndpoint}");
-                    // Fire and forget initialization
-                    _ = SendRegisterToolsAsync(token);
-                }
-            }
-        }
-
-        private async Task HandleMessageAsync(string json, CancellationToken token)
-        {
-            JObject payload;
-            try
-            {
-                payload = JObject.Parse(json);
-            }
-            catch { return; }
-
-            string method = payload.Value<string>("method");
-            
-            // Dispatch known protocol messages
-            if (string.Equals(method, "tools/call", StringComparison.OrdinalIgnoreCase) || 
-                string.Equals(method, "notifications/message", StringComparison.OrdinalIgnoreCase)) 
-            {
-                await HandleToolCallAsync(payload, token).ConfigureAwait(false);
-            }
-        }
-
-        private async Task HandleToolCallAsync(JObject request, CancellationToken token)
-        {
-            var requestParams = request["params"] as JObject;
-            string toolName = requestParams?.Value<string>("name");
-            string id = request.Value<string>("id");
-            
-            if (string.IsNullOrEmpty(toolName) || string.IsNullOrEmpty(id)) return;
-
-            // Execute the tool (Inter-service communication)
-            // We still depend on TransportCommandDispatcher for now; refactoring this "Dispatcher" is a separate task.
-            // However, we construct the request/response using our Factory.
-            
-            var internalEnvelope = new JObject
-            {
-                ["type"] = toolName,
-                ["params"] = requestParams?["arguments"] as JObject ?? new JObject()
-            };
-
-            string responseJson;
-            bool isError = false;
-            try 
-            {
-                responseJson = await TransportCommandDispatcher.ExecuteCommandJsonAsync(internalEnvelope.ToString(Formatting.None), token).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                responseJson = JsonConvert.SerializeObject(new { error = ex.Message });
-                isError = true;
-            }
-
-            // Parse result to get inner text
-            string resultText;
-            try 
-            {
-                var internalResult = JObject.Parse(responseJson);
-                resultText = internalResult.ToString(Formatting.None);
-                if (internalResult["status"]?.ToString() == "error") isError = true;
-            } 
-            catch { resultText = "{}"; }
-
-            // Construct standard MCP response
-            var rpcResponse = McpJsonRpcFactory.CreateToolCallResult(id, resultText, isError);
-            
-            await SendJsonAsync(rpcResponse, token).ConfigureAwait(false);
-        }
-
-        private async Task SendRegisterToolsAsync(CancellationToken token)
-        {
-             var initRequest = McpJsonRpcFactory.CreateInitializeRequest();
-             await SendJsonAsync(initRequest, token).ConfigureAwait(false);
-        }
-
-        private async Task SendJsonAsync(JObject payload, CancellationToken token)
-        {
-            if (string.IsNullOrEmpty(_postEndpoint)) return;
-            
-            var content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json");
-            var response = await _httpClient.PostAsync(_postEndpoint, content, token).ConfigureAwait(false);
-            response.EnsureSuccessStatusCode();
-        }
-        
-        public Task SendNotificationAsync(string method, JObject parameters)
-        {
-            var notification = McpJsonRpcFactory.CreateNotification(method, parameters);
-            return SendJsonAsync(notification, _lifecycleCts?.Token ?? CancellationToken.None);
+            _session.Dispose(); // Disposes transport too
         }
     }
 }
