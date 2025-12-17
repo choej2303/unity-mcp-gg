@@ -10,68 +10,88 @@ namespace MCPForUnity.Editor.Services
     /// </summary>
     public static class SceneTraversalService
     {
-        public static List<object> GetSceneHierarchyData(Scene scene)
+        [System.Serializable]
+        public class HierarchyNode
+        {
+            public string name;
+            public bool activeSelf;
+            public bool activeInHierarchy;
+            public string tag;
+            public int layer;
+            public bool isStatic;
+            public int instanceID;
+            public TransformData transform;
+            public List<HierarchyNode> children;
+        }
+
+        [System.Serializable]
+        public class TransformData
+        {
+            public Vector3Data position;
+            public Vector3Data rotation;
+            public Vector3Data scale;
+        }
+
+        [System.Serializable]
+        public struct Vector3Data
+        {
+            public float x, y, z;
+            public Vector3Data(Vector3 v) { x = v.x; y = v.y; z = v.z; }
+        }
+
+        public static List<HierarchyNode> GetSceneHierarchyData(Scene scene, int maxDepth = 20)
         {
             if (!scene.IsValid() || !scene.isLoaded)
             {
-                return new List<object>();
+                return new List<HierarchyNode>();
             }
 
             GameObject[] rootObjects = scene.GetRootGameObjects();
-            return rootObjects.Select(go => GetGameObjectDataRecursive(go)).ToList();
+            // Use initial capacity to avoid resizing
+            var result = new List<HierarchyNode>(rootObjects.Length);
+            
+            foreach (var go in rootObjects)
+            {
+                result.Add(GetGameObjectDataRecursive(go, 0, maxDepth));
+            }
+            return result;
         }
 
         /// <summary>
         /// Recursively builds a data representation of a GameObject and its children.
+        /// Uses DTOs to minimize GC overhead.
         /// </summary>
-        public static object GetGameObjectDataRecursive(GameObject go)
+        public static HierarchyNode GetGameObjectDataRecursive(GameObject go, int currentDepth, int maxDepth)
         {
-            if (go == null)
-                return null;
+            if (go == null) return null;
 
-            var childrenData = new List<object>();
-            foreach (Transform child in go.transform)
+            var node = new HierarchyNode
             {
-                childrenData.Add(GetGameObjectDataRecursive(child.gameObject));
-            }
-
-            var gameObjectData = new Dictionary<string, object>
-            {
-                { "name", go.name },
-                { "activeSelf", go.activeSelf },
-                { "activeInHierarchy", go.activeInHierarchy },
-                { "tag", go.tag },
-                { "layer", go.layer },
-                { "isStatic", go.isStatic },
-                { "instanceID", go.GetInstanceID() },
+                name = go.name,
+                activeSelf = go.activeSelf,
+                activeInHierarchy = go.activeInHierarchy,
+                tag = go.tag,
+                layer = go.layer,
+                isStatic = go.isStatic,
+                instanceID = go.GetInstanceID(),
+                transform = new TransformData
                 {
-                    "transform",
-                    new
-                    {
-                        position = new
-                        {
-                            x = go.transform.localPosition.x,
-                            y = go.transform.localPosition.y,
-                            z = go.transform.localPosition.z,
-                        },
-                        rotation = new
-                        {
-                            x = go.transform.localRotation.eulerAngles.x,
-                            y = go.transform.localRotation.eulerAngles.y,
-                            z = go.transform.localRotation.eulerAngles.z,
-                        },
-                        scale = new
-                        {
-                            x = go.transform.localScale.x,
-                            y = go.transform.localScale.y,
-                            z = go.transform.localScale.z,
-                        },
-                    }
-                },
-                { "children", childrenData },
+                    position = new Vector3Data(go.transform.localPosition),
+                    rotation = new Vector3Data(go.transform.localRotation.eulerAngles),
+                    scale = new Vector3Data(go.transform.localScale)
+                }
             };
 
-            return gameObjectData;
+            if (currentDepth < maxDepth && go.transform.childCount > 0)
+            {
+                node.children = new List<HierarchyNode>(go.transform.childCount);
+                foreach (Transform child in go.transform)
+                {
+                    node.children.Add(GetGameObjectDataRecursive(child.gameObject, currentDepth + 1, maxDepth));
+                }
+            }
+            
+            return node;
         }
     }
 }

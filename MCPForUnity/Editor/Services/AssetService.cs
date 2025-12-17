@@ -458,7 +458,9 @@ namespace MCPForUnity.Editor.Services
             try
             {
                 string[] guids = AssetDatabase.FindAssets(string.Join(" ", searchFilters), folderScope);
-                List<object> results = new List<object>();
+                
+                // Optimization: Filter paths first without creating full data objects
+                List<string> matchedPaths = new List<string>();
                 int totalFound = 0;
 
                 foreach (string guid in guids)
@@ -466,18 +468,26 @@ namespace MCPForUnity.Editor.Services
                     string assetPath = AssetDatabase.GUIDToAssetPath(guid);
                     if (string.IsNullOrEmpty(assetPath)) continue;
 
+                    // I/O Check only if filter is active
                     if (filterDateAfter.HasValue)
                     {
                         DateTime lastWriteTime = File.GetLastWriteTimeUtc(Path.Combine(Directory.GetCurrentDirectory(), assetPath));
                         if (lastWriteTime <= filterDateAfter.Value) continue;
                     }
 
+                    matchedPaths.Add(assetPath);
                     totalFound++;
-                    results.Add(GetAssetData(assetPath, generatePreview));
                 }
 
+                // Optimization: Page BEFORE fetching heavy data
                 int startIndex = (pageNumber - 1) * pageSize;
-                var pagedResults = results.Skip(startIndex).Take(pageSize).ToList();
+                var pagedPaths = matchedPaths.Skip(startIndex).Take(pageSize);
+                
+                List<object> pagedResults = new List<object>();
+                foreach (var path in pagedPaths)
+                {
+                   pagedResults.Add(GetAssetData(path, generatePreview));
+                }
 
                 return new SuccessResponse(
                     $"Found {totalFound} asset(s). Returning page {pageNumber} ({pagedResults.Count} assets).",
@@ -606,27 +616,45 @@ namespace MCPForUnity.Editor.Services
             return modified;
         }
 
+        // --- Reflection Cache ---
+        private static readonly Dictionary<(Type, string), System.Reflection.PropertyInfo> _propertyCache = new Dictionary<(Type, string), System.Reflection.PropertyInfo>();
+        private static readonly Dictionary<(Type, string), System.Reflection.FieldInfo> _fieldCache = new Dictionary<(Type, string), System.Reflection.FieldInfo>();
+
         private static bool SetPropertyOrField(object target, string memberName, JToken value, Type type)
         {
             type = type ?? target.GetType();
-            System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase;
-
+            // System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase;
+            // Note: Caching logic assumes flags don't change.
+            
             try {
-                System.Reflection.PropertyInfo propInfo = type.GetProperty(memberName, flags);
+                // Try Property Cache
+                if (!_propertyCache.TryGetValue((type, memberName), out var propInfo))
+                {
+                    propInfo = type.GetProperty(memberName, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+                    if (propInfo != null) _propertyCache[(type, memberName)] = propInfo;
+                }
+
                 if (propInfo != null && propInfo.CanWrite) {
                     object val = ConvertJTokenToType(value, propInfo.PropertyType);
                     if (val != null && !object.Equals(propInfo.GetValue(target), val)) {
                         propInfo.SetValue(target, val);
                         return true;
                     }
-                } else {
-                    System.Reflection.FieldInfo fieldInfo = type.GetField(memberName, flags);
-                    if (fieldInfo != null) {
-                        object val = ConvertJTokenToType(value, fieldInfo.FieldType);
-                        if (val != null && !object.Equals(fieldInfo.GetValue(target), val)) {
-                            fieldInfo.SetValue(target, val);
-                            return true;
-                        }
+                    return false; // Found but didn't change or couldn't convert
+                }
+
+                // Try Field Cache
+                 if (!_fieldCache.TryGetValue((type, memberName), out var fieldInfo))
+                {
+                    fieldInfo = type.GetField(memberName, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+                    if (fieldInfo != null) _fieldCache[(type, memberName)] = fieldInfo;
+                }
+
+                if (fieldInfo != null) {
+                    object val = ConvertJTokenToType(value, fieldInfo.FieldType);
+                    if (val != null && !object.Equals(fieldInfo.GetValue(target), val)) {
+                        fieldInfo.SetValue(target, val);
+                        return true;
                     }
                 }
             } catch (Exception ex) {
@@ -680,35 +708,42 @@ namespace MCPForUnity.Editor.Services
 
             string guid = AssetDatabase.AssetPathToGUID(path);
             Type assetType = AssetDatabase.GetMainAssetTypeAtPath(path);
-            UnityEngine.Object asset = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(path);
+            
+            // Lazy Load: Only load object if preview is requested
+            UnityEngine.Object asset = null;
             string previewBase64 = null;
             int previewWidth = 0;
             int previewHeight = 0;
+            int instanceID = 0;
 
-            if (generatePreview && asset != null)
+            if (generatePreview)
             {
-                Texture2D preview = AssetPreview.GetAssetPreview(asset);
-                if (preview != null) {
-                    try {
-                        // (Preview generation logic omitted for brevity in summary, assume same logic)
-                         RenderTexture rt = RenderTexture.GetTemporary(preview.width, preview.height);
-                         Graphics.Blit(preview, rt);
-                         RenderTexture previous = RenderTexture.active;
-                         RenderTexture.active = rt;
-                         Texture2D readablePreview = new Texture2D(preview.width, preview.height, TextureFormat.RGB24, false);
-                         readablePreview.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
-                         readablePreview.Apply();
-                         RenderTexture.active = previous;
-                         RenderTexture.ReleaseTemporary(rt);
-                         
-                         byte[] pngData = readablePreview.EncodeToPNG();
-                         if (pngData != null) {
-                             previewBase64 = Convert.ToBase64String(pngData);
-                             previewWidth = readablePreview.width;
-                             previewHeight = readablePreview.height;
-                         }
-                         UnityEngine.Object.DestroyImmediate(readablePreview);
-                    } catch {}
+                asset = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(path);
+                if (asset != null)
+                {
+                    instanceID = asset.GetInstanceID();
+                    Texture2D preview = AssetPreview.GetAssetPreview(asset);
+                    if (preview != null) {
+                        try {
+                             RenderTexture rt = RenderTexture.GetTemporary(preview.width, preview.height);
+                             Graphics.Blit(preview, rt);
+                             RenderTexture previous = RenderTexture.active;
+                             RenderTexture.active = rt;
+                             Texture2D readablePreview = new Texture2D(preview.width, preview.height, TextureFormat.RGB24, false);
+                             readablePreview.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
+                             readablePreview.Apply();
+                             RenderTexture.active = previous;
+                             RenderTexture.ReleaseTemporary(rt);
+                             
+                             byte[] pngData = readablePreview.EncodeToPNG();
+                             if (pngData != null) {
+                                 previewBase64 = Convert.ToBase64String(pngData);
+                                 previewWidth = readablePreview.width;
+                                 previewHeight = readablePreview.height;
+                             }
+                             UnityEngine.Object.DestroyImmediate(readablePreview);
+                        } catch {}
+                    }
                 }
             }
 
@@ -720,7 +755,7 @@ namespace MCPForUnity.Editor.Services
                 name = Path.GetFileNameWithoutExtension(path),
                 fileName = Path.GetFileName(path),
                 isFolder = AssetDatabase.IsValidFolder(path),
-                instanceID = asset?.GetInstanceID() ?? 0,
+                instanceID = instanceID, // 0 if not loaded
                 lastWriteTimeUtc = File.GetLastWriteTimeUtc(Path.Combine(Directory.GetCurrentDirectory(), path)).ToString("o"),
                 previewBase64 = previewBase64,
                 previewWidth = previewWidth,

@@ -27,6 +27,7 @@ namespace MCPForUnity.Editor.Tools
             public int? buildIndex { get; set; }
             public string fileName { get; set; } = string.Empty;
             public int? superSize { get; set; }
+            public int? maxDepth { get; set; }
         }
 
         private static SceneCommand ToSceneCommand(JObject p)
@@ -48,7 +49,8 @@ namespace MCPForUnity.Editor.Tools
                 path = p["path"]?.ToString() ?? string.Empty,
                 buildIndex = BI(p["buildIndex"] ?? p["build_index"]),
                 fileName = (p["fileName"] ?? p["filename"])?.ToString() ?? string.Empty,
-                superSize = BI(p["superSize"] ?? p["super_size"] ?? p["supersize"])
+                superSize = BI(p["superSize"] ?? p["super_size"] ?? p["supersize"]),
+                maxDepth = BI(p["maxDepth"] ?? p["max_depth"])
             };
         }
 
@@ -138,7 +140,7 @@ namespace MCPForUnity.Editor.Tools
                     return SaveScene(fullPath, relativePath);
                 case "get_hierarchy":
                     try { McpLog.Info("[ManageScene] get_hierarchy: entering", always: false); } catch { }
-                    var gh = GetSceneHierarchy();
+                    var gh = GetSceneHierarchy(cmd.maxDepth);
                     try { McpLog.Info("[ManageScene] get_hierarchy: exiting", always: false); } catch { }
                     return gh;
                 case "get_active":
@@ -453,7 +455,7 @@ namespace MCPForUnity.Editor.Tools
             }
         }
 
-        private static object GetSceneHierarchy()
+        private static object GetSceneHierarchy(int? maxDepth)
         {
             try
             {
@@ -468,7 +470,7 @@ namespace MCPForUnity.Editor.Tools
                 }
 
                 try { McpLog.Info("[ManageScene] get_hierarchy: fetching hierarchy data", always: false); } catch { }
-                var hierarchy = SceneTraversalService.GetSceneHierarchyData(activeScene);
+                var hierarchy = SceneTraversalService.GetSceneHierarchyData(activeScene, maxDepth ?? 20);
 
                 var resp = new SuccessResponse(
                     $"Retrieved hierarchy for scene '{activeScene.name}'.",
