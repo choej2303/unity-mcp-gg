@@ -1,7 +1,7 @@
 from fastmcp import Context
 from models.models import MCPResponse
 
-from services.custom_tool_service import (
+from services.tools.custom_tool_service import (
     CustomToolService,
     resolve_project_id_for_unity_instance,
 )

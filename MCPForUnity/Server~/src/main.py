@@ -15,7 +15,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import WebSocketRoute
 
 from core.config import config
-from services.custom_tool_service import CustomToolService
+from services.tools.custom_tool_service import CustomToolService
 from transport.plugin_hub import PluginHub
 from transport.plugin_registry import PluginRegistry
 from services.resources import register_all_resources

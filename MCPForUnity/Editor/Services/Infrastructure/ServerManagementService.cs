@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Collections.Concurrent;
 using MCPForUnity.Editor.Constants;
 using MCPForUnity.Editor.Helpers;
 using UnityEditor;
@@ -26,6 +27,69 @@ namespace MCPForUnity.Editor.Services
         private static bool _cleanupRegistered = false;
         private ProcessJobObject _jobObject;
         private bool _disposed;
+        
+        // Log Batching
+        private readonly ConcurrentQueue<(string Message, bool IsError)> _logQueue = new();
+        private bool _isLogFlushScheduled = false;
+        private const int MAX_LOGS_PER_BATCH = 50;
+
+        private void EnqueueLog(string message, bool isError)
+        {
+            _logQueue.Enqueue((message, isError));
+            
+            // If already scheduled, efficient exit
+            if (_isLogFlushScheduled) return;
+
+            _isLogFlushScheduled = true;
+            
+            // Schedule processing on main thread
+            // We throttle implicitly because delayCall executes once per frame cycle usually
+            EditorApplication.delayCall += FlushLogs;
+        }
+
+        private void FlushLogs()
+        {
+            _isLogFlushScheduled = false;
+            
+            if (_logQueue.IsEmpty) return;
+
+            int count = 0;
+            while (_logQueue.TryDequeue(out var logItem) && count < MAX_LOGS_PER_BATCH)
+            {
+                count++;
+                ProcessSingleLog(logItem.Message, logItem.IsError);
+            }
+            
+            // If we still have logs, schedule another flush immediately
+            if (!_logQueue.IsEmpty)
+            {
+                _isLogFlushScheduled = true;
+                EditorApplication.delayCall += FlushLogs;
+            }
+        }
+
+        private void ProcessSingleLog(string message, bool isError)
+        {
+            if (!isError)
+            {
+                McpLog.Debug($"[Server] {message}");
+                OnLogReceived?.Invoke(message);
+            }
+            else
+            {
+                // Heuristic: Many CLI tools (including Python logging) write INFO/status to stderr.
+                if (message.Contains("INFO") || message.Contains("Started server") || message.Contains("Uvicorn running"))
+                {
+                    McpLog.Info($"[Server] {message}");
+                    OnErrorReceived?.Invoke(message); 
+                }
+                else
+                {
+                    McpLog.Error($"[Server Error] {message}");
+                    OnErrorReceived?.Invoke(message);
+                }
+            }
+        }
         
         /// <summary>
         /// Register cleanup handler for Unity exit
@@ -355,38 +419,14 @@ namespace MCPForUnity.Editor.Services
                         { 
                             if (!string.IsNullOrEmpty(e.Data)) 
                             {
-                                // Unity API must be called on main thread
-                                EditorApplication.delayCall += () => 
-                                {
-                                    McpLog.Debug($"[Server] {e.Data}");
-                                    OnLogReceived?.Invoke(e.Data);
-                                };
+                                EnqueueLog(e.Data, false);
                             }
                         };
                         process.ErrorDataReceived += (s, e) => 
                         { 
                             if (!string.IsNullOrEmpty(e.Data)) 
                             {
-                                EditorApplication.delayCall += () => 
-                                {
-                                    // Heuristic: Many CLI tools (including Python logging) write INFO/status to stderr.
-                                    // We shouldn't treat everything as an error.
-                                    if (e.Data.Contains("INFO") || e.Data.Contains("Started server") || e.Data.Contains("Uvicorn running"))
-                                    {
-                                        McpLog.Info($"[Server] {e.Data}");
-                                        // Still invoke OnErrorReceived for listeners who might want the raw stream, 
-                                        // or consider splitting OnLog/OnError based on content.
-                                        // For now, let's keep OnErrorReceived distinct for the raw stream, 
-                                        // but avoid McpLog.Error spam.
-                                        OnErrorReceived?.Invoke(e.Data); 
-                                    }
-                                    else
-                                    {
-                                        // True error candidate
-                                        McpLog.Error($"[Server Error] {e.Data}");
-                                        OnErrorReceived?.Invoke(e.Data);
-                                    }
-                                };
+                                EnqueueLog(e.Data, true);
                             }
                         };
                         

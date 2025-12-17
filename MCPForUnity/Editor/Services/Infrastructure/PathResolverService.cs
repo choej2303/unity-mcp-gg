@@ -22,10 +22,18 @@ namespace MCPForUnity.Editor.Services
         {
             try
             {
+                // 1. Check override
                 string overridePath = EditorPrefs.GetString(EditorPrefKeys.UvxPathOverride, string.Empty);
                 if (!string.IsNullOrEmpty(overridePath) && File.Exists(overridePath))
                 {
                     return overridePath;
+                }
+
+                // 2. Check local bootstrap
+                string localUv = GetLocalUvPath();
+                if (!string.IsNullOrEmpty(localUv))
+                {
+                    return localUv;
                 }
             }
             catch
@@ -35,6 +43,23 @@ namespace MCPForUnity.Editor.Services
             }
 
             return "uvx";
+        }
+
+        private string GetLocalUvPath()
+        {
+            string packageRoot = AssetPathUtility.GetPackageAbsolutePath();
+            if (string.IsNullOrEmpty(packageRoot)) return null;
+
+            string serverRoot = Path.Combine(packageRoot, "Server~");
+            string uvDir = Path.Combine(serverRoot, ".uv");  // Hidden .uv directory
+            string uvName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "uv.exe" : "uv";
+            string uvPath = Path.Combine(uvDir, uvName);
+
+            if (File.Exists(uvPath))
+            {
+                return uvPath;
+            }
+            return null;
         }
 
         public string GetClaudeCliPath()
