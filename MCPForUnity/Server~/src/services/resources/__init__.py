@@ -16,6 +16,8 @@ logger = logging.getLogger("mcp-for-unity-server")
 
 # Export decorator for easy imports within tools
 __all__ = ['register_all_resources']
+from . import custom_tools
+from . import context_resources
 
 
 def register_all_resources(mcp: FastMCP):
