@@ -21,7 +21,10 @@ dev = [
 ]
 
 [project.scripts]
-mcp-for-unity = "src.main:main"
+mcp-for-unity = "main:main"
+
+[tool.setuptools.package-dir]
+"" = "src"
 
 [tool.setuptools.packages.find]
 where = ["src"]

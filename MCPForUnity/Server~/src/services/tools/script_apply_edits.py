@@ -65,6 +65,128 @@ def _err(code: str, message: str, *, expected: dict[str, Any] | None = None, rew
         payload["data"] = data
     return payload
 
+
+def _unwrap_and_alias(edit: dict[str, Any]) -> dict[str, Any]:
+    """Unwrap single-key wrappers and normalize field aliases."""
+    # Unwrap single-key wrappers like {"replace_method": {...}}
+    for wrapper_key in (
+        "replace_method", "insert_method", "delete_method",
+        "replace_class", "delete_class",
+        "anchor_insert", "anchor_replace", "anchor_delete",
+    ):
+        if wrapper_key in edit and isinstance(edit[wrapper_key], dict):
+            inner = dict(edit[wrapper_key])
+            inner["op"] = wrapper_key
+            edit = inner
+            break
+
+    e = dict(edit)
+    op = (e.get("op") or e.get("operation") or e.get(
+        "type") or e.get("mode") or "").strip().lower()
+    if op:
+        e["op"] = op
+
+    # Common field aliases
+    if "class_name" in e and "className" not in e:
+        e["className"] = e.pop("class_name")
+    if "class" in e and "className" not in e:
+        e["className"] = e.pop("class")
+    if "method_name" in e and "methodName" not in e:
+        e["methodName"] = e.pop("method_name")
+    if "target" in e and "methodName" not in e:
+        e["methodName"] = e.pop("target")
+    if "method" in e and "methodName" not in e:
+        e["methodName"] = e.pop("method")
+    if "new_content" in e and "replacement" not in e:
+        e["replacement"] = e.pop("new_content")
+    if "newMethod" in e and "replacement" not in e:
+        e["replacement"] = e.pop("newMethod")
+    if "new_method" in e and "replacement" not in e:
+        e["replacement"] = e.pop("new_method")
+    if "content" in e and "replacement" not in e:
+        e["replacement"] = e.pop("content")
+    if "after" in e and "afterMethodName" not in e:
+        e["afterMethodName"] = e.pop("after")
+    if "after_method" in e and "afterMethodName" not in e:
+        e["afterMethodName"] = e.pop("after_method")
+    if "before" in e and "beforeMethodName" not in e:
+        e["beforeMethodName"] = e.pop("before")
+    if "before_method" in e and "beforeMethodName" not in e:
+        e["beforeMethodName"] = e.pop("before_method")
+    # anchor_method → before/after based on position (default after)
+    if "anchor_method" in e:
+        anchor = e.pop("anchor_method")
+        pos = (e.get("position") or "after").strip().lower()
+        if pos == "before" and "beforeMethodName" not in e:
+            e["beforeMethodName"] = anchor
+        elif "afterMethodName" not in e:
+            e["afterMethodName"] = anchor
+    if "anchorText" in e and "anchor" not in e:
+        e["anchor"] = e.pop("anchorText")
+    if "pattern" in e and "anchor" not in e and e.get("op") and e["op"].startswith("anchor_"):
+        e["anchor"] = e.pop("pattern")
+    if "newText" in e and "text" not in e:
+        e["text"] = e.pop("newText")
+
+    # CI compatibility: Accept method-anchored anchor_insert and upgrade to insert_method
+    if (
+        e.get("op") == "anchor_insert"
+        and not e.get("anchor")
+        and (e.get("afterMethodName") or e.get("beforeMethodName"))
+    ):
+        e["op"] = "insert_method"
+        if "replacement" not in e:
+            e["replacement"] = e.get("text", "")
+
+    # LSP-like range edit -> replace_range
+    if "range" in e and isinstance(e["range"], dict):
+        rng = e.pop("range")
+        start = rng.get("start", {})
+        end = rng.get("end", {})
+        e["op"] = "replace_range"
+        e["startLine"] = int(start.get("line", 0)) + 1
+        e["startCol"] = int(start.get("character", 0)) + 1
+        e["endLine"] = int(end.get("line", 0)) + 1
+        e["endCol"] = int(end.get("character", 0)) + 1
+        if "newText" in edit and "text" not in e:
+            e["text"] = edit.get("newText", "")
+    return e
+
+
+def _normalize_edits(raw_edits: list[dict[str, Any]], script_name: str) -> list[dict[str, Any]]:
+    """Normalize a list of raw edits: unwrap, alias fields, and apply default values."""
+    normalized_edits: list[dict[str, Any]] = []
+    for raw in raw_edits or []:
+        e = _unwrap_and_alias(raw)
+        op = (e.get("op") or e.get("operation") or e.get(
+            "type") or e.get("mode") or "").strip().lower()
+
+        # Default className to script name if missing on structured method/class ops
+        if op in ("replace_class", "delete_class", "replace_method", "delete_method", "insert_method") and not e.get("className"):
+            e["className"] = script_name
+
+        # Map common aliases for text ops
+        if op in ("text_replace",):
+            e["op"] = "replace_range"
+            normalized_edits.append(e)
+            continue
+        if op in ("regex_delete",):
+            e["op"] = "regex_replace"
+            e.setdefault("text", "")
+            normalized_edits.append(e)
+            continue
+        if op == "regex_replace" and ("replacement" not in e):
+            if "text" in e:
+                e["replacement"] = e.get("text", "")
+            elif "insert" in e or "content" in e:
+                e["replacement"] = e.get("insert") or e.get("content") or ""
+        if op == "anchor_insert" and not (e.get("text") or e.get("insert") or e.get("content") or e.get("replacement")):
+            e["op"] = "anchor_delete"
+            normalized_edits.append(e)
+            continue
+        normalized_edits.append(e)
+    return normalized_edits
+
 # Natural-language parsing removed; clients should send structured edits.
 
 
@@ -139,131 +261,9 @@ async def script_apply_edits(
 
     # Normalize locator first so downstream calls target the correct script file.
     name, path = normalize_script_locator(name, path)
-    # Normalize unsupported or aliased ops to known structured/text paths
-
-    def _unwrap_and_alias(edit: dict[str, Any]) -> dict[str, Any]:
-        # Unwrap single-key wrappers like {"replace_method": {...}}
-        for wrapper_key in (
-            "replace_method", "insert_method", "delete_method",
-            "replace_class", "delete_class",
-            "anchor_insert", "anchor_replace", "anchor_delete",
-        ):
-            if wrapper_key in edit and isinstance(edit[wrapper_key], dict):
-                inner = dict(edit[wrapper_key])
-                inner["op"] = wrapper_key
-                edit = inner
-                break
-
-        e = dict(edit)
-        op = (e.get("op") or e.get("operation") or e.get(
-            "type") or e.get("mode") or "").strip().lower()
-        if op:
-            e["op"] = op
-
-        # Common field aliases
-        if "class_name" in e and "className" not in e:
-            e["className"] = e.pop("class_name")
-        if "class" in e and "className" not in e:
-            e["className"] = e.pop("class")
-        if "method_name" in e and "methodName" not in e:
-            e["methodName"] = e.pop("method_name")
-        # Some clients use a generic 'target' for method name
-        if "target" in e and "methodName" not in e:
-            e["methodName"] = e.pop("target")
-        if "method" in e and "methodName" not in e:
-            e["methodName"] = e.pop("method")
-        if "new_content" in e and "replacement" not in e:
-            e["replacement"] = e.pop("new_content")
-        if "newMethod" in e and "replacement" not in e:
-            e["replacement"] = e.pop("newMethod")
-        if "new_method" in e and "replacement" not in e:
-            e["replacement"] = e.pop("new_method")
-        if "content" in e and "replacement" not in e:
-            e["replacement"] = e.pop("content")
-        if "after" in e and "afterMethodName" not in e:
-            e["afterMethodName"] = e.pop("after")
-        if "after_method" in e and "afterMethodName" not in e:
-            e["afterMethodName"] = e.pop("after_method")
-        if "before" in e and "beforeMethodName" not in e:
-            e["beforeMethodName"] = e.pop("before")
-        if "before_method" in e and "beforeMethodName" not in e:
-            e["beforeMethodName"] = e.pop("before_method")
-        # anchor_method → before/after based on position (default after)
-        if "anchor_method" in e:
-            anchor = e.pop("anchor_method")
-            pos = (e.get("position") or "after").strip().lower()
-            if pos == "before" and "beforeMethodName" not in e:
-                e["beforeMethodName"] = anchor
-            elif "afterMethodName" not in e:
-                e["afterMethodName"] = anchor
-        if "anchorText" in e and "anchor" not in e:
-            e["anchor"] = e.pop("anchorText")
-        if "pattern" in e and "anchor" not in e and e.get("op") and e["op"].startswith("anchor_"):
-            e["anchor"] = e.pop("pattern")
-        if "newText" in e and "text" not in e:
-            e["text"] = e.pop("newText")
-
-        # CI compatibility (T‑A/T‑E):
-        # Accept method-anchored anchor_insert and upgrade to insert_method
-        # Example incoming shape:
-        #   {"op":"anchor_insert","afterMethodName":"GetCurrentTarget","text":"..."}
-        if (
-            e.get("op") == "anchor_insert"
-            and not e.get("anchor")
-            and (e.get("afterMethodName") or e.get("beforeMethodName"))
-        ):
-            e["op"] = "insert_method"
-            if "replacement" not in e:
-                e["replacement"] = e.get("text", "")
-
-        # LSP-like range edit -> replace_range
-        if "range" in e and isinstance(e["range"], dict):
-            rng = e.pop("range")
-            start = rng.get("start", {})
-            end = rng.get("end", {})
-            # Convert 0-based to 1-based line/col
-            e["op"] = "replace_range"
-            e["startLine"] = int(start.get("line", 0)) + 1
-            e["startCol"] = int(start.get("character", 0)) + 1
-            e["endLine"] = int(end.get("line", 0)) + 1
-            e["endCol"] = int(end.get("character", 0)) + 1
-            if "newText" in edit and "text" not in e:
-                e["text"] = edit.get("newText", "")
-        return e
-
-    normalized_edits: list[dict[str, Any]] = []
-    for raw in edits or []:
-        e = _unwrap_and_alias(raw)
-        op = (e.get("op") or e.get("operation") or e.get(
-            "type") or e.get("mode") or "").strip().lower()
-
-        # Default className to script name if missing on structured method/class ops
-        if op in ("replace_class", "delete_class", "replace_method", "delete_method", "insert_method") and not e.get("className"):
-            e["className"] = name
-
-        # Map common aliases for text ops
-        if op in ("text_replace",):
-            e["op"] = "replace_range"
-            normalized_edits.append(e)
-            continue
-        if op in ("regex_delete",):
-            e["op"] = "regex_replace"
-            e.setdefault("text", "")
-            normalized_edits.append(e)
-            continue
-        if op == "regex_replace" and ("replacement" not in e):
-            if "text" in e:
-                e["replacement"] = e.get("text", "")
-            elif "insert" in e or "content" in e:
-                e["replacement"] = e.get(
-                    "insert") or e.get("content") or ""
-        if op == "anchor_insert" and not (e.get("text") or e.get("insert") or e.get("content") or e.get("replacement")):
-            e["op"] = "anchor_delete"
-            normalized_edits.append(e)
-            continue
-        normalized_edits.append(e)
-
-    edits = normalized_edits
+    
+    # Normalize edits using extracted helper function
+    edits = _normalize_edits(edits, name)
     normalized_for_echo = edits
 
     # Validate required fields and produce machine-parsable hints

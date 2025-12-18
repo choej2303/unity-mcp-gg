@@ -1,7 +1,6 @@
 from fastmcp import Context
 from services.registry import mcp_for_unity_resource
-from services.custom_tool_service import resolve_project_id_for_unity_instance
-from services.tools.custom_tool_service import CustomToolService
+from services.tools.custom_tool_service import CustomToolService, resolve_project_id_for_unity_instance
 from services.tools import get_unity_instance_from_context
 
 @mcp_for_unity_resource(

@@ -4,7 +4,7 @@ Test the improved anchor matching logic.
 
 import re
 import pytest
-import services.tools.utils as utils_module
+import src.services.tools.utils as utils_module
 
 def test_improved_anchor_matching():
     """Test that our improved anchor matching finds the right closing brace."""
