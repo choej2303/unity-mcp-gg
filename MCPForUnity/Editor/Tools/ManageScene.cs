@@ -479,11 +479,23 @@ namespace MCPForUnity.Editor.Tools
                 }
 
                 try { McpLog.Info("[ManageScene] get_hierarchy: fetching hierarchy data", always: false); } catch { }
-                var hierarchy = SceneTraversalService.GetSceneHierarchyData(activeScene, maxDepth ?? 20);
+                try { McpLog.Info("[ManageScene] get_hierarchy: fetching root objects", always: false); } catch { }
+                GameObject[] rootObjects = activeScene.GetRootGameObjects();
+                try { McpLog.Info($"[ManageScene] get_hierarchy: rootCount={rootObjects?.Length ?? 0}", always: false); } catch { }
+                
+                // Optimized: Stream-based serialization to avoid GC overhead of massive Dictionary/List graph.
+                var sb = new StringBuilder();
+                sb.Append("[");
+                for (int i = 0; i < rootObjects.Length; i++)
+                {
+                    if (i > 0) sb.Append(",");
+                    AppendGameObjectJson(sb, rootObjects[i]);
+                }
+                sb.Append("]");
 
                 var resp = new SuccessResponse(
                     $"Retrieved hierarchy for scene '{activeScene.name}'.",
-                    hierarchy
+                    sb.ToString()
                 );
                 try { McpLog.Info("[ManageScene] get_hierarchy: success", always: false); } catch { }
                 return resp;
@@ -495,6 +507,50 @@ namespace MCPForUnity.Editor.Tools
             }
         }
 
+
+
+        /// <summary>
+        /// Appends GameObject data as a JSON object to the StringBuilder.
+        /// </summary>
+        private static void AppendGameObjectJson(StringBuilder sb, GameObject go)
+        {
+            if (go == null)
+            {
+                sb.Append("null");
+                return;
+            }
+
+            sb.Append("{");
+            
+            // Basic properties
+            sb.AppendFormat("\"name\":{0},", JsonUtility.ToJson(go.name)); // Safe string escaping
+            sb.AppendFormat("\"activeSelf\":{0},", go.activeSelf ? "true" : "false");
+            sb.AppendFormat("\"activeInHierarchy\":{0},", go.activeInHierarchy ? "true" : "false");
+            sb.AppendFormat("\"tag\":{0},", JsonUtility.ToJson(go.tag)); 
+            sb.AppendFormat("\"layer\":{0},", go.layer);
+            sb.AppendFormat("\"isStatic\":{0},", go.isStatic ? "true" : "false");
+            sb.AppendFormat("\"instanceID\":{0},", go.GetInstanceID());
+
+            // Transform
+            var t = go.transform;
+            sb.Append("\"transform\":{");
+            sb.AppendFormat("\"position\":{{\"x\":{0},\"y\":{1},\"z\":{2}}},", t.localPosition.x, t.localPosition.y, t.localPosition.z);
+            sb.AppendFormat("\"rotation\":{{\"x\":{0},\"y\":{1},\"z\":{2}}},", t.localRotation.eulerAngles.x, t.localRotation.eulerAngles.y, t.localRotation.eulerAngles.z);
+            sb.AppendFormat("\"scale\":{{\"x\":{0},\"y\":{1},\"z\":{2}}}", t.localScale.x, t.localScale.y, t.localScale.z);
+            sb.Append("},");
+
+            // Children
+            sb.Append("\"children\":[");
+            int childCount = t.childCount;
+            for (int i = 0; i < childCount; i++)
+            {
+                if (i > 0) sb.Append(",");
+                AppendGameObjectJson(sb, t.GetChild(i).gameObject);
+            }
+            sb.Append("]");
+
+            sb.Append("}");
+        }
 
     }
 }

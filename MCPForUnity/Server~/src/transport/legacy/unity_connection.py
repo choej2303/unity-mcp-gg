@@ -42,6 +42,7 @@ class UnityConnection:
         if self.port is None:
             self.port = stdio_port_registry.get_port(self.instance_id)
         self._io_lock = threading.Lock()
+        self._async_io_lock = asyncio.Lock()
         self._conn_lock = threading.Lock()
         self._recv_buffer = bytearray()  # Persistent buffer for stream processing
 

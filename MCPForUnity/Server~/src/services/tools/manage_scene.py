@@ -68,7 +68,15 @@ async def manage_scene(
 
         # Preserve structured failure data; unwrap success into a friendlier shape
         if isinstance(response, dict) and response.get("success"):
-            return {"success": True, "message": response.get("message", "Scene operation successful."), "data": response.get("data")}
+            data = response.get("data")
+            # Optimized C# backend returns JSON string for hierarchy to reduce GC; parse it here
+            if isinstance(data, str) and (data.startswith("{") or data.startswith("[")):
+                try:
+                    import json
+                    data = json.loads(data)
+                except Exception:
+                    pass
+            return {"success": True, "message": response.get("message", "Scene operation successful."), "data": data}
         return response if isinstance(response, dict) else {"success": False, "message": str(response)}
 
     except Exception as e:
