@@ -3,13 +3,14 @@
 import logging
 import os
 from pathlib import Path
-from typing import TypeVar, Any
+from typing import Any, TypeVar
 
 from fastmcp import Context, FastMCP
-from core.telemetry_decorator import telemetry_tool
+
 from core.logging_decorator import log_execution
-from utils.module_discovery import discover_modules
+from core.telemetry_decorator import telemetry_tool
 from services.registry import get_registered_tools
+from utils.module_discovery import discover_modules
 
 logger = logging.getLogger("mcp-for-unity-server")
 
@@ -41,23 +42,21 @@ def register_all_tools(mcp: FastMCP):
         return
 
     for tool_info in tools:
-        func = tool_info['func']
-        tool_name = tool_info['name']
-        description = tool_info['description']
-        kwargs = tool_info['kwargs']
+        func = tool_info["func"]
+        tool_name = tool_info["name"]
+        description = tool_info["description"]
+        kwargs = tool_info["kwargs"]
 
         # [FIX] Pydantic KeyError solution
         # Force 'ctx' annotation to Any so Pydantic doesn't validate it
-        if 'ctx' in func.__annotations__:
-            func.__annotations__['ctx'] = Any
-
+        if "ctx" in func.__annotations__:
+            func.__annotations__["ctx"] = Any
 
         # Apply the @mcp.tool decorator, telemetry, and logging
         wrapped = log_execution(tool_name, "Tool")(func)
         wrapped = telemetry_tool(tool_name)(wrapped)
-        wrapped = mcp.tool(
-            name=tool_name, description=description, **kwargs)(wrapped)
-        tool_info['func'] = wrapped
+        wrapped = mcp.tool(name=tool_name, description=description, **kwargs)(wrapped)
+        tool_info["func"] = wrapped
         logger.debug(f"Registered tool: {tool_name} - {description}")
 
     logger.info(f"Registered {len(tools)} MCP tools")

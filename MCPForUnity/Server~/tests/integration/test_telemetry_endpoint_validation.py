@@ -1,5 +1,6 @@
-import os
 import importlib
+import os
+
 import pytest
 
 
@@ -34,8 +35,9 @@ def test_config_preferred_then_env_override(tmp_path, monkeypatch):
         assert tc.config.endpoint == "https://example.com/telemetry"
 
         # Env should override config
-        monkeypatch.setenv("UNITY_MCP_TELEMETRY_ENDPOINT",
-                           "https://override.example/ep")
+        monkeypatch.setenv(
+            "UNITY_MCP_TELEMETRY_ENDPOINT", "https://override.example/ep"
+        )
         importlib.reload(telemetry)
         tc2 = telemetry.TelemetryCollector()
         assert tc2.config.endpoint == "https://override.example/ep"

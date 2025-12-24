@@ -1,11 +1,12 @@
 from typing import Annotated, Any, Literal
 
 from fastmcp import Context
+
 from services.registry import mcp_for_unity_tool
 from services.tools import get_unity_instance_from_context
-from transport.unity_transport import send_with_unity_instance
-from transport.legacy.unity_connection import async_send_command_with_retry
 from services.tools.utils import coerce_bool
+from transport.legacy.unity_connection import async_send_command_with_retry
+from transport.unity_transport import send_with_unity_instance
 
 
 @mcp_for_unity_tool(
@@ -13,19 +14,44 @@ from services.tools.utils import coerce_bool
 )
 async def manage_prefabs(
     ctx: Context,
-    action: Annotated[Literal["open_stage", "close_stage", "save_open_stage", "create_from_gameobject"], "Perform prefab operations."],
-    prefab_path: Annotated[str,
-                           "Prefab asset path relative to Assets e.g. Assets/Prefabs/favorite.prefab"] | None = None,
-    mode: Annotated[str,
-                    "Optional prefab stage mode (only 'InIsolation' is currently supported)"] | None = None,
-    save_before_close: Annotated[bool,
-                                 "When true, `close_stage` will save the prefab before exiting the stage."] | None = None,
-    target: Annotated[str,
-                      "Scene GameObject name required for create_from_gameobject"] | None = None,
-    allow_overwrite: Annotated[bool,
-                               "Allow replacing an existing prefab at the same path"] | None = None,
-    search_inactive: Annotated[bool,
-                               "Include inactive objects when resolving the target name"] | None = None,
+    action: Annotated[
+        Literal[
+            "open_stage", "close_stage", "save_open_stage", "create_from_gameobject"
+        ],
+        "Perform prefab operations.",
+    ],
+    prefab_path: (
+        Annotated[
+            str,
+            "Prefab asset path relative to Assets e.g. Assets/Prefabs/favorite.prefab",
+        ]
+        | None
+    ) = None,
+    mode: (
+        Annotated[
+            str,
+            "Optional prefab stage mode (only 'InIsolation' is currently supported)",
+        ]
+        | None
+    ) = None,
+    save_before_close: (
+        Annotated[
+            bool,
+            "When true, `close_stage` will save the prefab before exiting the stage.",
+        ]
+        | None
+    ) = None,
+    target: (
+        Annotated[str, "Scene GameObject name required for create_from_gameobject"]
+        | None
+    ) = None,
+    allow_overwrite: (
+        Annotated[bool, "Allow replacing an existing prefab at the same path"] | None
+    ) = None,
+    search_inactive: (
+        Annotated[bool, "Include inactive objects when resolving the target name"]
+        | None
+    ) = None,
 ) -> dict[str, Any]:
     # Get active instance from session state
     # Removed session_state import
@@ -49,7 +75,9 @@ async def manage_prefabs(
         search_inactive_val = coerce_bool(search_inactive)
         if search_inactive_val is not None:
             params["searchInactive"] = search_inactive_val
-        response = await send_with_unity_instance(async_send_command_with_retry, unity_instance, "manage_prefabs", params)
+        response = await send_with_unity_instance(
+            async_send_command_with_retry, unity_instance, "manage_prefabs", params
+        )
 
         if isinstance(response, dict) and response.get("success"):
             return {
@@ -57,6 +85,10 @@ async def manage_prefabs(
                 "message": response.get("message", "Prefab operation successful."),
                 "data": response.get("data"),
             }
-        return response if isinstance(response, dict) else {"success": False, "message": str(response)}
+        return (
+            response
+            if isinstance(response, dict)
+            else {"success": False, "message": str(response)}
+        )
     except Exception as exc:
         return {"success": False, "message": f"Python error managing prefabs: {exc}"}

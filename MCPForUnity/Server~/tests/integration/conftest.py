@@ -65,11 +65,13 @@ class _DummyContext:
 
 class _DummyMiddleware:
     """Base middleware class stub."""
+
     pass
 
 
 class _DummyMiddlewareContext:
     """Middleware context stub."""
+
     pass
 
 

@@ -12,18 +12,18 @@ from starlette.endpoints import WebSocketEndpoint
 from starlette.websockets import WebSocket
 
 from core.config import config
-from transport.plugin_registry import PluginRegistry
 from transport.models import (
-    WelcomeMessage,
-    RegisteredMessage,
+    CommandResultMessage,
     ExecuteCommandMessage,
+    PongMessage,
+    RegisteredMessage,
     RegisterMessage,
     RegisterToolsMessage,
-    PongMessage,
-    CommandResultMessage,
-    SessionList,
     SessionDetails,
+    SessionList,
+    WelcomeMessage,
 )
+from transport.plugin_registry import PluginRegistry
 
 logger = logging.getLogger("mcp-for-unity-server")
 
@@ -75,7 +75,9 @@ class PluginHub(WebSocketEndpoint):
             if message_type == "register":
                 await self._handle_register(websocket, RegisterMessage(**data))
             elif message_type == "register_tools":
-                await self._handle_register_tools(websocket, RegisterToolsMessage(**data))
+                await self._handle_register_tools(
+                    websocket, RegisterToolsMessage(**data)
+                )
             elif message_type == "pong":
                 await self._handle_pong(PongMessage(**data))
             elif message_type == "command_result":
@@ -92,19 +94,21 @@ class PluginHub(WebSocketEndpoint):
             return
         async with lock:
             session_id = next(
-                (sid for sid, ws in cls._connections.items() if ws is websocket), None)
+                (sid for sid, ws in cls._connections.items() if ws is websocket), None
+            )
             if session_id:
                 cls._connections.pop(session_id, None)
                 if cls._registry:
                     await cls._registry.unregister(session_id)
-                logger.info(
-                    f"Plugin session {session_id} disconnected ({close_code})")
+                logger.info(f"Plugin session {session_id} disconnected ({close_code})")
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
     @classmethod
-    async def send_command(cls, session_id: str, command_type: str, params: dict[str, Any]) -> dict[str, Any]:
+    async def send_command(
+        cls, session_id: str, command_type: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
         websocket = await cls._get_connection(session_id)
         command_id = str(uuid.uuid4())
         future: asyncio.Future = asyncio.get_running_loop().create_future()
@@ -115,8 +119,7 @@ class PluginHub(WebSocketEndpoint):
 
         async with lock:
             if command_id in cls._pending:
-                raise RuntimeError(
-                    f"Duplicate command id generated: {command_id}")
+                raise RuntimeError(f"Duplicate command id generated: {command_id}")
             cls._pending[command_id] = future
 
         try:
@@ -185,7 +188,9 @@ class PluginHub(WebSocketEndpoint):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    async def _handle_register(self, websocket: WebSocket, payload: RegisterMessage) -> None:
+    async def _handle_register(
+        self, websocket: WebSocket, payload: RegisterMessage
+    ) -> None:
         cls = type(self)
         registry = cls._registry
         lock = cls._lock
@@ -199,20 +204,23 @@ class PluginHub(WebSocketEndpoint):
 
         if not project_hash:
             await websocket.close(code=4400)
-            raise ValueError(
-                "Plugin registration missing project_hash")
+            raise ValueError("Plugin registration missing project_hash")
 
         session_id = str(uuid.uuid4())
         # Inform the plugin of its assigned session ID
         response = RegisteredMessage(session_id=session_id)
         await websocket.send_json(response.model_dump())
 
-        session = await registry.register(session_id, project_name, project_hash, unity_version)
+        session = await registry.register(
+            session_id, project_name, project_hash, unity_version
+        )
         async with lock:
             cls._connections[session.session_id] = websocket
         logger.info(f"Plugin registered: {project_name} ({project_hash})")
 
-    async def _handle_register_tools(self, websocket: WebSocket, payload: RegisterToolsMessage) -> None:
+    async def _handle_register_tools(
+        self, websocket: WebSocket, payload: RegisterToolsMessage
+    ) -> None:
         cls = type(self)
         registry = cls._registry
         lock = cls._lock
@@ -222,15 +230,15 @@ class PluginHub(WebSocketEndpoint):
         # Find session_id for this websocket
         async with lock:
             session_id = next(
-                (sid for sid, ws in cls._connections.items() if ws is websocket), None)
+                (sid for sid, ws in cls._connections.items() if ws is websocket), None
+            )
 
         if not session_id:
             logger.warning("Received register_tools from unknown connection")
             return
 
         await registry.register_tools_for_session(session_id, payload.tools)
-        logger.info(
-            f"Registered {len(payload.tools)} tools for session {session_id}")
+        logger.info(f"Registered {len(payload.tools)} tools for session {session_id}")
 
     async def _handle_command_result(self, payload: CommandResultMessage) -> None:
         cls = type(self)

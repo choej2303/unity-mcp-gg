@@ -113,8 +113,31 @@ namespace MCPForUnity.Editor.Windows
 
         private void OnRefreshClicked()
         {
-            _dependencyResult = DependencyManager.CheckAllDependencies();
-            UpdateUI();
+            // Valid feedback
+            if (refreshButton != null)
+            {
+                refreshButton.SetEnabled(false);
+                refreshButton.text = "Checking...";
+            }
+
+            // Defer heavy work to next frame to allow UI repaint
+            EditorApplication.delayCall += () =>
+            {
+                try
+                {
+                    _dependencyResult = DependencyManager.CheckAllDependencies();
+                    UpdateUI();
+                }
+                finally
+                {
+                    // Restore button state
+                    if (refreshButton != null)
+                    {
+                        refreshButton.SetEnabled(true);
+                        refreshButton.text = "Refresh";
+                    }
+                }
+            };
         }
 
         private void OnDoneClicked()

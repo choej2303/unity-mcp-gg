@@ -4,10 +4,14 @@ from .test_helpers import DummyContext
 
 
 class DummyMCP:
-    def __init__(self): self.tools = {}
+    def __init__(self):
+        self.tools = {}
 
     def tool(self, *args, **kwargs):
-        def deco(fn): self.tools[fn.__name__] = fn; return fn
+        def deco(fn):
+            self.tools[fn.__name__] = fn
+            return fn
+
         return deco
 
 
@@ -15,14 +19,26 @@ def setup_tools():
     mcp = DummyMCP()
     # Import the tools module to trigger decorator registration
     import services.tools.manage_script
+
     # Get the registered tools from the registry
     from services.registry import get_registered_tools
+
     tools = get_registered_tools()
     # Add all script-related tools to our dummy MCP
     for tool_info in tools:
-        tool_name = tool_info['name']
-        if any(keyword in tool_name for keyword in ['script', 'apply_text', 'create_script', 'delete_script', 'validate_script', 'get_sha']):
-            mcp.tools[tool_name] = tool_info['func']
+        tool_name = tool_info["name"]
+        if any(
+            keyword in tool_name
+            for keyword in [
+                "script",
+                "apply_text",
+                "create_script",
+                "delete_script",
+                "validate_script",
+                "get_sha",
+            ]
+        ):
+            mcp.tools[tool_name] = tool_info["func"]
     return mcp.tools
 
 
@@ -38,6 +54,7 @@ async def test_normalizes_lsp_and_index_ranges(monkeypatch):
 
     # Patch the send_command_with_retry function at the module level where it's imported
     import transport.legacy.unity_connection
+
     monkeypatch.setattr(
         transport.legacy.unity_connection,
         "async_send_command_with_retry",
@@ -46,10 +63,15 @@ async def test_normalizes_lsp_and_index_ranges(monkeypatch):
     # No need to patch tools.manage_script; it calls unity_connection.send_command_with_retry
 
     # LSP-style
-    edits = [{
-        "range": {"start": {"line": 10, "character": 2}, "end": {"line": 10, "character": 2}},
-        "newText": "// lsp\n"
-    }]
+    edits = [
+        {
+            "range": {
+                "start": {"line": 10, "character": 2},
+                "end": {"line": 10, "character": 2},
+            },
+            "newText": "// lsp\n",
+        }
+    ]
     await apply(
         DummyContext(),
         uri="unity://path/Assets/Scripts/F.cs",
@@ -97,8 +119,10 @@ async def test_noop_evidence_shape(monkeypatch):
             "success": True,
             "data": {"no_op": True, "evidence": {"reason": "identical_content"}},
         }
+
     # Patch the send_command_with_retry function at the module level where it's imported
     import transport.legacy.unity_connection
+
     monkeypatch.setattr(
         transport.legacy.unity_connection,
         "async_send_command_with_retry",
@@ -125,14 +149,16 @@ async def test_atomic_multi_span_and_relaxed(monkeypatch):
     tools_struct = DummyMCP()
     # Import the tools module to trigger decorator registration
     import services.tools.script_apply_edits
+
     # Get the registered tools from the registry
     from services.registry import get_registered_tools
+
     tools = get_registered_tools()
     # Add all script-related tools to our dummy MCP
     for tool_info in tools:
-        tool_name = tool_info['name']
-        if any(keyword in tool_name for keyword in ['script_apply', 'apply_edits']):
-            tools_struct.tools[tool_name] = tool_info['func']
+        tool_name = tool_info["name"]
+        if any(keyword in tool_name for keyword in ["script_apply", "apply_edits"]):
+            tools_struct.tools[tool_name] = tool_info["func"]
     # Fake send for read and write; verify atomic applyMode and validate=relaxed passes through
     sent = {}
 
@@ -147,6 +173,7 @@ async def test_atomic_multi_span_and_relaxed(monkeypatch):
 
     # Patch the send_command_with_retry function at the module level where it's imported
     import transport.legacy.unity_connection
+
     monkeypatch.setattr(
         transport.legacy.unity_connection,
         "async_send_command_with_retry",
@@ -155,8 +182,13 @@ async def test_atomic_multi_span_and_relaxed(monkeypatch):
 
     edits = [
         {"startLine": 2, "startCol": 14, "endLine": 2, "endCol": 15, "newText": "3"},
-        {"startLine": 3, "startCol": 2, "endLine": 3,
-            "endCol": 2, "newText": "// tail\n"}
+        {
+            "startLine": 3,
+            "startCol": 2,
+            "endLine": 3,
+            "endCol": 2,
+            "newText": "// tail\n",
+        },
     ]
     resp = await apply_text(
         DummyContext(),

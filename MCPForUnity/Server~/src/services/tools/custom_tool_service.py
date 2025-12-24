@@ -10,12 +10,12 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from models.models import MCPResponse, ToolDefinitionModel, ToolParameterModel
-from transport.unity_transport import send_with_unity_instance
 from transport.legacy.unity_connection import (
     async_send_command_with_retry,
     get_unity_connection_pool,
 )
 from transport.plugin_hub import PluginHub
+from transport.unity_transport import send_with_unity_instance
 
 logger = logging.getLogger("mcp-for-unity-server")
 
@@ -59,7 +59,9 @@ class CustomToolService:
             try:
                 payload = RegisterToolsPayload.model_validate(await request.json())
             except ValidationError as exc:
-                return JSONResponse({"success": False, "error": exc.errors()}, status_code=400)
+                return JSONResponse(
+                    {"success": False, "error": exc.errors()}, status_code=400
+                )
 
             registered: list[str] = []
             replaced: list[str] = []
@@ -70,8 +72,7 @@ class CustomToolService:
                 registered.append(tool.name)
 
             if payload.project_hash:
-                self._hash_to_project[payload.project_hash.lower(
-                )] = payload.project_id
+                self._hash_to_project[payload.project_hash.lower()] = payload.project_id
 
             message = f"Registered {len(registered)} tool(s)"
             if replaced:
@@ -92,10 +93,10 @@ class CustomToolService:
         # but for now we might sync from ALL active instances or default one?
         # Actually list_registered_tools is often called without project_id if it's GLOBAL.
         # But here it takes project_id.
-        
+
         # Determine the Unity instance for this project_id would be hard unless we track it.
         # However, CustomToolService is global.
-        
+
         # Try to sync tools from Unity Stdio Bridge
         await self._sync_all_unity_tools()
 
@@ -103,20 +104,22 @@ class CustomToolService:
         hub_tools = await PluginHub.get_tools_for_project(project_id)
         return legacy + hub_tools
 
-    async def get_tool_definition(self, project_id: str, tool_name: str) -> ToolDefinitionModel | None:
+    async def get_tool_definition(
+        self, project_id: str, tool_name: str
+    ) -> ToolDefinitionModel | None:
         # Check cache first
         tool = self._project_tools.get(project_id, {}).get(tool_name)
         if tool:
             return tool
-            
+
         # If not found, maybe sync?
         if not tool:
-             # Just-in-time sync (maybe a specific tool was just added)
-             # But limit frequency
-             await self._sync_all_unity_tools(force=False)
-             tool = self._project_tools.get(project_id, {}).get(tool_name)
-             if tool:
-                 return tool
+            # Just-in-time sync (maybe a specific tool was just added)
+            # But limit frequency
+            await self._sync_all_unity_tools(force=False)
+            tool = self._project_tools.get(project_id, {}).get(tool_name)
+            if tool:
+                return tool
 
         return await PluginHub.get_tool_definition(project_id, tool_name)
 
@@ -171,78 +174,82 @@ class CustomToolService:
         return tool_name in self._project_tools.get(project_id, {})
 
     def _register_tool(self, project_id: str, definition: ToolDefinitionModel) -> None:
-        self._project_tools.setdefault(project_id, {})[
-            definition.name] = definition
+        self._project_tools.setdefault(project_id, {})[definition.name] = definition
 
     _last_sync_time: float = 0
-    _sync_interval: float = 5.0 # Seconds
+    _sync_interval: float = 5.0  # Seconds
 
     async def _sync_all_unity_tools(self, force: bool = False):
         if not force and (time.time() - self._last_sync_time < self._sync_interval):
             return
 
         self._last_sync_time = time.time()
-        
+
         try:
             pool = get_unity_connection_pool()
             instances = pool.discover_all_instances()
-            
+
             for inst in instances:
                 try:
                     # Request tool list from this instance
                     response = await async_send_command_with_retry(
-                        "list_csharp_tools", 
-                        {}, 
-                        instance_id=inst.id
+                        "list_csharp_tools", {}, instance_id=inst.id
                     )
-                    
+
                     if not isinstance(response, dict) or "tools" not in response:
                         continue
-                        
+
                     # Calculate project_id for this instance
                     pid = compute_project_id(inst.name, inst.path)
-                    
+
                     # Register tools
                     for tool_data in response["tools"]:
                         # Validate basic fields
                         if "name" not in tool_data:
                             continue
-                            
+
                         # Convert to ToolDefinitionModel
                         try:
                             # Map fields manually to ensure compatibility
                             params_models = []
                             for p in tool_data.get("parameters", []):
-                                params_models.append(ToolParameterModel(
-                                    name=p["name"],
-                                    description=p.get("description"),
-                                    type=p.get("type", "string"),
-                                    required=p.get("required", True),
-                                    default_value=p.get("default_value")
-                                ))
+                                params_models.append(
+                                    ToolParameterModel(
+                                        name=p["name"],
+                                        description=p.get("description"),
+                                        type=p.get("type", "string"),
+                                        required=p.get("required", True),
+                                        default_value=p.get("default_value"),
+                                    )
+                                )
 
                             defn = ToolDefinitionModel(
                                 name=tool_data["name"],
                                 description=tool_data.get("description"),
-                                structured_output=tool_data.get("structured_output", True),
-                                requires_polling=tool_data.get("requires_polling", False),
+                                structured_output=tool_data.get(
+                                    "structured_output", True
+                                ),
+                                requires_polling=tool_data.get(
+                                    "requires_polling", False
+                                ),
                                 poll_action=tool_data.get("poll_action", "status"),
-                                parameters=params_models
+                                parameters=params_models,
                             )
-                            
+
                             # Only auto-register if the tool says so
                             if tool_data.get("auto_register", True):
                                 self._register_tool(pid, defn)
-                                
+
                         except ValidationError as ve:
-                            logger.warn(f"Failed to validate tool {tool_data.get('name')}: {ve}")
-                            
+                            logger.warn(
+                                f"Failed to validate tool {tool_data.get('name')}: {ve}"
+                            )
+
                 except Exception as ex:
                     logger.debug(f"Failed to sync tools from instance {inst.id}: {ex}")
-                    
+
         except Exception as e:
             logger.warn(f"Error during Unity tool sync: {e}")
-
 
     def get_project_id_for_hash(self, project_hash: str | None) -> str | None:
         if not project_hash:
@@ -280,14 +287,21 @@ class CustomToolService:
 
             try:
                 response = await send_with_unity_instance(
-                    async_send_command_with_retry, unity_instance, tool_name, poll_params
+                    async_send_command_with_retry,
+                    unity_instance,
+                    tool_name,
+                    poll_params,
                 )
-            except Exception as exc:  # pragma: no cover - network/domain reload variability
+            except (
+                Exception
+            ) as exc:  # pragma: no cover - network/domain reload variability
                 logger.debug(f"Polling {tool_name} failed, will retry: {exc}")
                 # Back off modestly but stay responsive.
                 response = {
                     "_mcp_status": "pending",
-                    "_mcp_poll_interval": min(max(poll_interval * 2, _DEFAULT_POLL_INTERVAL), 5.0),
+                    "_mcp_poll_interval": min(
+                        max(poll_interval * 2, _DEFAULT_POLL_INTERVAL), 5.0
+                    ),
                     "message": f"Retrying after transient error: {exc}",
                 }
 
@@ -305,8 +319,7 @@ class CustomToolService:
             return "final", _DEFAULT_POLL_INTERVAL
 
         if status == "pending":
-            interval_raw = response.get(
-                "_mcp_poll_interval", _DEFAULT_POLL_INTERVAL)
+            interval_raw = response.get("_mcp_poll_interval", _DEFAULT_POLL_INTERVAL)
             try:
                 interval = float(interval_raw)
             except (TypeError, ValueError):
@@ -331,8 +344,11 @@ class CustomToolService:
                 success=response.get("success", True),
                 message=response.get("message"),
                 error=response.get("error"),
-                data=response.get(
-                    "data", response) if "data" not in response else response["data"],
+                data=(
+                    response.get("data", response)
+                    if "data" not in response
+                    else response["data"]
+                ),
             )
 
         success = True
@@ -344,10 +360,8 @@ class CustomToolService:
             success = response.get("success", True)
             if "_mcp_status" in response and response["_mcp_status"] == "error":
                 success = False
-            message = str(response.get("message")) if response.get(
-                "message") else None
-            error = str(response.get("error")) if response.get(
-                "error") else None
+            message = str(response.get("message")) if response.get("message") else None
+            error = str(response.get("error")) if response.get("error") else None
             data = response.get("data")
             if "success" not in response and "_mcp_status" not in response:
                 data = response
@@ -363,8 +377,6 @@ class CustomToolService:
         if response is None:
             return None
         return {"message": str(response)}
-
-
 
 
 def compute_project_id(project_name: str, project_path: str) -> str:
@@ -385,7 +397,8 @@ def resolve_project_id_for_unity_instance(unity_instance: str | None) -> str | N
             name_part, _, hash_hint = unity_instance.partition("@")
             target = next(
                 (
-                    inst for inst in instances
+                    inst
+                    for inst in instances
                     if inst.name == name_part and inst.hash.startswith(hash_hint)
                 ),
                 None,
@@ -393,7 +406,8 @@ def resolve_project_id_for_unity_instance(unity_instance: str | None) -> str | N
         else:
             target = next(
                 (
-                    inst for inst in instances
+                    inst
+                    for inst in instances
                     if inst.id == unity_instance or inst.hash.startswith(unity_instance)
                 ),
                 None,
@@ -403,7 +417,8 @@ def resolve_project_id_for_unity_instance(unity_instance: str | None) -> str | N
             return compute_project_id(target.name, target.path)
     except Exception:
         logger.debug(
-            f"Failed to resolve project id via connection pool for {unity_instance}")
+            f"Failed to resolve project id via connection pool for {unity_instance}"
+        )
 
     # HTTP/WebSocket transport: resolve via PluginHub using project_hash
     try:
@@ -427,6 +442,7 @@ def resolve_project_id_for_unity_instance(unity_instance: str | None) -> str | N
             return lowered
     except Exception:
         logger.debug(
-            f"Failed to resolve project id via plugin hub for {unity_instance}")
+            f"Failed to resolve project id via plugin hub for {unity_instance}"
+        )
 
     return None

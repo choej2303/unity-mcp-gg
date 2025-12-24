@@ -1,19 +1,21 @@
 from fastmcp import Context
-from models.models import MCPResponse
 
+from models.models import MCPResponse
+from services.registry import mcp_for_unity_tool
+from services.tools import get_unity_instance_from_context
 from services.tools.custom_tool_service import (
     CustomToolService,
     resolve_project_id_for_unity_instance,
 )
-from services.registry import mcp_for_unity_tool
-from services.tools import get_unity_instance_from_context
 
 
 @mcp_for_unity_tool(
     name="execute_custom_tool",
     description="Execute a project-scoped custom tool registered by Unity.",
 )
-async def execute_custom_tool(ctx: Context, tool_name: str, parameters: dict | None = None) -> MCPResponse:
+async def execute_custom_tool(
+    ctx: Context, tool_name: str, parameters: dict | None = None
+) -> MCPResponse:
     unity_instance = get_unity_instance_from_context(ctx)
     if not unity_instance:
         return MCPResponse(

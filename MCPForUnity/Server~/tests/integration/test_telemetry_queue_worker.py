@@ -1,7 +1,7 @@
-import types
+import queue as q
 import threading
 import time
-import queue as q
+import types
 
 import core.telemetry as telemetry
 
@@ -41,12 +41,10 @@ def test_telemetry_queue_backpressure_and_single_worker(monkeypatch, caplog):
     time.sleep(0.3)
 
     # Verify drops were logged (queue full backpressure)
-    dropped_logs = [
-        m for m in caplog.messages if "Telemetry queue full; dropping" in m]
+    dropped_logs = [m for m in caplog.messages if "Telemetry queue full; dropping" in m]
     assert len(dropped_logs) >= 1
 
     # Ensure only one worker thread exists and is alive
     assert collector._worker.is_alive()
-    worker_threads = [
-        t for t in threading.enumerate() if t is collector._worker]
+    worker_threads = [t for t in threading.enumerate() if t is collector._worker]
     assert len(worker_threads) == 1

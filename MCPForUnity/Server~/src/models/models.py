@@ -1,5 +1,6 @@
-from typing import Any
 from datetime import datetime
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -33,6 +34,7 @@ class ToolDefinitionModel(BaseModel):
 
 class UnityInstanceInfo(BaseModel):
     """Information about a Unity Editor instance"""
+
     id: str  # "ProjectName@hash" or fallback to hash
     name: str  # Project name extracted from path
     path: str  # Full project path (Assets folder)
@@ -51,6 +53,8 @@ class UnityInstanceInfo(BaseModel):
             "hash": self.hash,
             "port": self.port,
             "status": self.status,
-            "last_heartbeat": self.last_heartbeat.isoformat() if self.last_heartbeat else None,
-            "unity_version": self.unity_version
+            "last_heartbeat": (
+                self.last_heartbeat.isoformat() if self.last_heartbeat else None
+            ),
+            "unity_version": self.unity_version,
         }

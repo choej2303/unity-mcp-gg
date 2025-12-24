@@ -10,14 +10,18 @@ DESIGN: Single source of truth via middleware state:
 - get_unity_instance_from_context() reads from ctx.get_state()
 - All tools (GameObject, Script, Asset, etc.) use get_unity_instance_from_context()
 """
+
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
 import pytest
-from unittest.mock import AsyncMock, Mock, MagicMock, patch
 from fastmcp import Context
 
-from transport.unity_instance_middleware import UnityInstanceMiddleware
 from services.tools import get_unity_instance_from_context
-from services.tools.set_active_instance import set_active_instance as set_active_instance_tool
-from transport.models import SessionList, SessionDetails
+from services.tools.set_active_instance import (
+    set_active_instance as set_active_instance_tool,
+)
+from transport.models import SessionDetails, SessionList
+from transport.unity_instance_middleware import UnityInstanceMiddleware
 
 
 class TestInstanceRoutingBasics:
@@ -90,8 +94,7 @@ class TestInstanceRoutingIntegration:
         ctx = Mock(spec=Context)
         ctx.session_id = "test-session"
         state_storage = {}
-        ctx.set_state = Mock(side_effect=lambda k,
-                             v: state_storage.__setitem__(k, v))
+        ctx.set_state = Mock(side_effect=lambda k, v: state_storage.__setitem__(k, v))
         ctx.get_state = Mock(side_effect=lambda k: state_storage.get(k))
 
         # Create middleware context
@@ -109,8 +112,7 @@ class TestInstanceRoutingIntegration:
         await middleware.on_call_tool(middleware_ctx, mock_call_next)
 
         # Verify state was injected
-        ctx.set_state.assert_called_once_with(
-            "unity_instance", "TestProject@abc123")
+        ctx.set_state.assert_called_once_with("unity_instance", "TestProject@abc123")
 
     def test_get_unity_instance_from_context_checks_state(self):
         """get_unity_instance_from_context must read from ctx.get_state()."""
@@ -123,8 +125,9 @@ class TestInstanceRoutingIntegration:
         # Call and verify
         result = get_unity_instance_from_context(ctx)
 
-        assert result == "Project@state123", \
-            "get_unity_instance_from_context must read from ctx.get_state()!"
+        assert (
+            result == "Project@state123"
+        ), "get_unity_instance_from_context must read from ctx.get_state()!"
 
     def test_get_unity_instance_returns_none_when_not_set(self):
         """Should return None when no instance is set."""
@@ -149,25 +152,34 @@ class TestInstanceRoutingToolCategories:
         # Set up state storage (only source of truth)
         state_storage = {"unity_instance": instance_id}
         ctx.get_state = Mock(side_effect=lambda k: state_storage.get(k))
-        ctx.set_state = Mock(side_effect=lambda k,
-                             v: state_storage.__setitem__(k, v))
+        ctx.set_state = Mock(side_effect=lambda k, v: state_storage.__setitem__(k, v))
 
         return ctx
 
-    @pytest.mark.parametrize("tool_category,tool_names", [
-        ("GameObject", ["manage_gameobject"]),
-        ("Asset", ["manage_asset"]),
-        ("Scene", ["manage_scene"]),
-        ("Editor", ["manage_editor"]),
-        ("Console", ["read_console"]),
-        ("Menu", ["execute_menu_item"]),
-        ("Shader", ["manage_shader"]),
-        ("Prefab", ["manage_prefabs"]),
-        ("Tests", ["run_tests"]),
-        ("Script", ["create_script", "delete_script",
-         "apply_text_edits", "script_apply_edits"]),
-        ("Resources", ["unity_instances", "menu_items", "tests"]),
-    ])
+    @pytest.mark.parametrize(
+        "tool_category,tool_names",
+        [
+            ("GameObject", ["manage_gameobject"]),
+            ("Asset", ["manage_asset"]),
+            ("Scene", ["manage_scene"]),
+            ("Editor", ["manage_editor"]),
+            ("Console", ["read_console"]),
+            ("Menu", ["execute_menu_item"]),
+            ("Shader", ["manage_shader"]),
+            ("Prefab", ["manage_prefabs"]),
+            ("Tests", ["run_tests"]),
+            (
+                "Script",
+                [
+                    "create_script",
+                    "delete_script",
+                    "apply_text_edits",
+                    "script_apply_edits",
+                ],
+            ),
+            ("Resources", ["unity_instances", "menu_items", "tests"]),
+        ],
+    )
     def test_tool_category_respects_active_instance(self, tool_category, tool_names):
         """All tool categories must respect set_active_instance."""
         # This is a specification test - individual tools need separate implementation tests
@@ -184,8 +196,7 @@ class TestInstanceRoutingHTTP:
         ctx = Mock(spec=Context)
         ctx.session_id = "http-session"
         state_storage = {}
-        ctx.set_state = Mock(side_effect=lambda k,
-                             v: state_storage.__setitem__(k, v))
+        ctx.set_state = Mock(side_effect=lambda k, v: state_storage.__setitem__(k, v))
         ctx.get_state = Mock(side_effect=lambda k: state_storage.get(k))
 
         monkeypatch.setenv("UNITY_MCP_TRANSPORT", "http")
@@ -220,8 +231,7 @@ class TestInstanceRoutingHTTP:
         ctx = Mock(spec=Context)
         ctx.session_id = "http-session-2"
         state_storage = {}
-        ctx.set_state = Mock(side_effect=lambda k,
-                             v: state_storage.__setitem__(k, v))
+        ctx.set_state = Mock(side_effect=lambda k, v: state_storage.__setitem__(k, v))
         ctx.get_state = Mock(side_effect=lambda k: state_storage.get(k))
 
         monkeypatch.setenv("UNITY_MCP_TRANSPORT", "http")
@@ -282,8 +292,18 @@ class TestInstanceRoutingHTTP:
         monkeypatch.setenv("UNITY_MCP_TRANSPORT", "http")
         fake_sessions = SessionList(
             sessions={
-                "sess-a": SessionDetails(project="ProjA", hash="abc12345", unity_version="2022", connected_at="now"),
-                "sess-b": SessionDetails(project="ProjB", hash="abc98765", unity_version="2022", connected_at="now"),
+                "sess-a": SessionDetails(
+                    project="ProjA",
+                    hash="abc12345",
+                    unity_version="2022",
+                    connected_at="now",
+                ),
+                "sess-b": SessionDetails(
+                    project="ProjB",
+                    hash="abc98765",
+                    unity_version="2022",
+                    connected_at="now",
+                ),
             }
         )
         monkeypatch.setattr(
@@ -312,8 +332,7 @@ class TestInstanceRoutingRaceConditions:
         ctx.session_id = "test-session"
 
         state_storage = {}
-        ctx.set_state = Mock(side_effect=lambda k,
-                             v: state_storage.__setitem__(k, v))
+        ctx.set_state = Mock(side_effect=lambda k, v: state_storage.__setitem__(k, v))
         ctx.get_state = Mock(side_effect=lambda k: state_storage.get(k))
 
         instances = ["Project1@aaa", "Project2@bbb", "Project3@ccc"]
@@ -345,8 +364,7 @@ class TestInstanceRoutingRaceConditions:
         ctx.info = Mock()
 
         state_storage = {}
-        ctx.set_state = Mock(side_effect=lambda k,
-                             v: state_storage.__setitem__(k, v))
+        ctx.set_state = Mock(side_effect=lambda k, v: state_storage.__setitem__(k, v))
         ctx.get_state = Mock(side_effect=lambda k: state_storage.get(k))
         ctx.request_context = None
 
@@ -367,8 +385,9 @@ class TestInstanceRoutingRaceConditions:
 
         # Verify create_script would route to correct instance
         result = await mock_create_script_call(ctx)
-        assert result["routed_to"] == "ramble@8e29de57", \
-            "create_script must route to the instance set by set_active_instance"
+        assert (
+            result["routed_to"] == "ramble@8e29de57"
+        ), "create_script must route to the instance set by set_active_instance"
 
 
 class TestInstanceRoutingSequentialOperations:
@@ -415,8 +434,7 @@ class TestInstanceRoutingSequentialOperations:
         ctx.info = Mock()
 
         state_storage = {}
-        ctx.set_state = Mock(side_effect=lambda k,
-                             v: state_storage.__setitem__(k, v))
+        ctx.set_state = Mock(side_effect=lambda k, v: state_storage.__setitem__(k, v))
         ctx.get_state = Mock(side_effect=lambda k: state_storage.get(k))
 
         # Execute sequence
@@ -424,23 +442,31 @@ class TestInstanceRoutingSequentialOperations:
         expected1 = await simulate_create_script(ctx, "Script1", "ramble@8e29de57")
 
         middleware.set_active_instance(ctx, "UnityMCPTests@cc8756d4")
-        expected2 = await simulate_create_script(ctx, "Script2", "UnityMCPTests@cc8756d4")
+        expected2 = await simulate_create_script(
+            ctx, "Script2", "UnityMCPTests@cc8756d4"
+        )
 
         middleware.set_active_instance(ctx, "ramble@8e29de57")
         expected3 = await simulate_create_script(ctx, "Script3", "ramble@8e29de57")
 
         middleware.set_active_instance(ctx, "UnityMCPTests@cc8756d4")
-        expected4 = await simulate_create_script(ctx, "Script4", "UnityMCPTests@cc8756d4")
+        expected4 = await simulate_create_script(
+            ctx, "Script4", "UnityMCPTests@cc8756d4"
+        )
 
         # Assertions - these will FAIL until the bug is fixed
-        assert script_routes.get("Script1") == expected1, \
-            f"Script1 should route to {expected1}, got {script_routes.get('Script1')}"
-        assert script_routes.get("Script2") == expected2, \
-            f"Script2 should route to {expected2}, got {script_routes.get('Script2')}"
-        assert script_routes.get("Script3") == expected3, \
-            f"Script3 should route to {expected3}, got {script_routes.get('Script3')}"
-        assert script_routes.get("Script4") == expected4, \
-            f"Script4 should route to {expected4}, got {script_routes.get('Script4')}"
+        assert (
+            script_routes.get("Script1") == expected1
+        ), f"Script1 should route to {expected1}, got {script_routes.get('Script1')}"
+        assert (
+            script_routes.get("Script2") == expected2
+        ), f"Script2 should route to {expected2}, got {script_routes.get('Script2')}"
+        assert (
+            script_routes.get("Script3") == expected3
+        ), f"Script3 should route to {expected3}, got {script_routes.get('Script3')}"
+        assert (
+            script_routes.get("Script4") == expected4
+        ), f"Script4 should route to {expected4}, got {script_routes.get('Script4')}"
 
 
 # Test regimen summary

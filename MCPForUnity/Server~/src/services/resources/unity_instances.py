@@ -1,9 +1,11 @@
 """
 Resource to list all available Unity Editor instances.
 """
+
 from typing import Any
 
 from fastmcp import Context
+
 from services.registry import mcp_for_unity_resource
 from transport.legacy.unity_connection import get_unity_connection_pool
 from transport.plugin_hub import PluginHub
@@ -13,7 +15,7 @@ from transport.unity_transport import _current_transport
 @mcp_for_unity_resource(
     uri="unity://instances",
     name="unity_instances",
-    description="Lists all running Unity Editor instances with their details."
+    description="Lists all running Unity Editor instances with their details.",
 )
 async def unity_instances(ctx: Context) -> dict[str, Any]:
     """
@@ -52,23 +54,23 @@ async def unity_instances(ctx: Context) -> dict[str, Any]:
                         "PluginHub session missing required 'project' or 'hash' fields."
                     )
 
-                instances.append({
-                    "id": f"{project}@{project_hash}",
-                    "name": project,
-                    "hash": project_hash,
-                    "unity_version": session_info.unity_version,
-                    "connected_at": session_info.connected_at,
-                    "session_id": session_id,
-                })
+                instances.append(
+                    {
+                        "id": f"{project}@{project_hash}",
+                        "name": project,
+                        "hash": project_hash,
+                        "unity_version": session_info.unity_version,
+                        "connected_at": session_info.connected_at,
+                        "session_id": session_id,
+                    }
+                )
 
             # Check for duplicate project names
             name_counts = {}
             for inst in instances:
-                name_counts[inst["name"]] = name_counts.get(
-                    inst["name"], 0) + 1
+                name_counts[inst["name"]] = name_counts.get(inst["name"], 0) + 1
 
-            duplicates = [name for name,
-                          count in name_counts.items() if count > 1]
+            duplicates = [name for name, count in name_counts.items() if count > 1]
 
             result = {
                 "success": True,
@@ -94,8 +96,7 @@ async def unity_instances(ctx: Context) -> dict[str, Any]:
             for inst in instances:
                 name_counts[inst.name] = name_counts.get(inst.name, 0) + 1
 
-            duplicates = [name for name,
-                          count in name_counts.items() if count > 1]
+            duplicates = [name for name, count in name_counts.items() if count > 1]
 
             result = {
                 "success": True,
@@ -118,5 +119,5 @@ async def unity_instances(ctx: Context) -> dict[str, Any]:
             "success": False,
             "error": f"Failed to list Unity instances: {str(e)}",
             "instance_count": 0,
-            "instances": []
+            "instances": [],
         }

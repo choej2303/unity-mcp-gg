@@ -1,13 +1,13 @@
-import json
-import re
-import os
 import bisect
-from typing import Any
-from urllib.parse import urlparse, unquote
+import json
 import math
+import os
+import re
+from typing import Any
+from urllib.parse import unquote, urlparse
 
 # Pre-compiled regex patterns for performance
-_METHOD_SIGNATURE_PATTERN = re.compile(r'\b(void|public|private|protected)\s+\w+\s*\(')
+_METHOD_SIGNATURE_PATTERN = re.compile(r"\b(void|public|private|protected)\s+\w+\s*\(")
 _DOLLAR_BACKREF_PATTERN = re.compile(r"\$(\d+)")
 
 
@@ -15,7 +15,7 @@ def parse_json_payload(payload: str | Any) -> Any:
     """Helper to robustly parse a potentially stringified JSON payload."""
     if not isinstance(payload, str):
         return payload
-    
+
     # Check if it looks like JSON structure
     stripped = payload.strip()
     if not (stripped.startswith("{") or stripped.startswith("[")):
@@ -42,7 +42,7 @@ def coerce_bool(value: Any, default: bool = False) -> bool:
 def coerce_vec3(value: Any, default: list[float] | None = None) -> list[float] | None:
     """
     Attempt to coerce a value into a [x, y, z] float list.
-    
+
     Accepts:
     - List/Tuple of 3 numbers
     - JSON string "[x, y, z]"
@@ -50,20 +50,20 @@ def coerce_vec3(value: Any, default: list[float] | None = None) -> list[float] |
     """
     if value is None:
         return default
-    
+
     # First try to parse if it's a string that looks like JSON
     val = parse_json_payload(value)
-    
+
     def _to_vec3(parts):
         try:
             vec = [float(parts[0]), float(parts[1]), float(parts[2])]
         except (ValueError, TypeError, IndexError):
             return default
         return vec if all(math.isfinite(n) for n in vec) else default
-        
+
     if isinstance(val, (list, tuple)) and len(val) == 3:
         return _to_vec3(val)
-        
+
     # Handle legacy strings "1,2,3" or "1 2 3"
     if isinstance(val, str):
         s = val.strip()
@@ -74,11 +74,12 @@ def coerce_vec3(value: Any, default: list[float] | None = None) -> list[float] |
         parts = [p.strip() for p in (s.split(",") if "," in s else s.split())]
         if len(parts) == 3:
             return _to_vec3(parts)
-            
+
     return default
 
 
 # --- Edit Utils (Moved from edit_utils.py) ---
+
 
 def split_uri(uri: str) -> tuple[str, str]:
     """Split an incoming URI or path into (name, directory) suitable for Unity.
@@ -93,7 +94,7 @@ def split_uri(uri: str) -> tuple[str, str]:
     """
     raw_path: str
     if uri.startswith("unity://path/"):
-        raw_path = uri[len("unity://path/"):]
+        raw_path = uri[len("unity://path/") :]
     elif uri.startswith("file://"):
         parsed = urlparse(uri)
         host = (parsed.netloc or "").strip()
@@ -109,7 +110,12 @@ def split_uri(uri: str) -> tuple[str, str]:
     # Percent-decode any residual encodings and normalize separators
     raw_path = unquote(raw_path).replace("\\", "/")
     # Strip leading slash only for Windows drive-letter forms like "/C:/..."
-    if os.name == "nt" and len(raw_path) >= 3 and raw_path[0] == "/" and raw_path[2] == ":":
+    if (
+        os.name == "nt"
+        and len(raw_path) >= 3
+        and raw_path[0] == "/"
+        and raw_path[2] == ":"
+    ):
         raw_path = raw_path[1:]
 
     # Normalize path (collapse ../, ./)
@@ -117,8 +123,7 @@ def split_uri(uri: str) -> tuple[str, str]:
 
     # If an 'Assets' segment exists, compute path relative to it (case-insensitive)
     parts = [p for p in norm.split("/") if p not in ("", ".")]
-    idx = next((i for i, seg in enumerate(parts)
-                if seg.lower() == "assets"), None)
+    idx = next((i for i, seg in enumerate(parts) if seg.lower() == "assets"), None)
     assets_rel = "/".join(parts[idx:]) if idx is not None else None
 
     effective_path = assets_rel if assets_rel else norm
@@ -150,9 +155,9 @@ def normalize_script_locator(name: str, path: str) -> tuple[str, str]:
 
     def strip_prefix(s: str) -> str:
         if s.startswith("unity://path/"):
-            return s[len("unity://path/"):]
+            return s[len("unity://path/") :]
         if s.startswith("file://"):
-            return s[len("file://"):]
+            return s[len("file://") :]
         return s
 
     def collapse_duplicate_tail(s: str) -> str:
@@ -175,13 +180,12 @@ def normalize_script_locator(name: str, path: str) -> tuple[str, str]:
         # If a directory was passed in path and file in name, join them
         if not candidate.endswith(".cs") and n.endswith(".cs"):
             v2 = strip_prefix(n)
-            candidate = (candidate.rstrip("/") + "/" + v2.split("/")[-1])
+            candidate = candidate.rstrip("/") + "/" + v2.split("/")[-1]
         if candidate.endswith(".cs"):
             parts = candidate.split("/")
             file_name = parts[-1]
             dir_path = "/".join(parts[:-1]) if len(parts) > 1 else "Assets"
-            base = file_name[:-
-                             3] if file_name.lower().endswith(".cs") else file_name
+            base = file_name[:-3] if file_name.lower().endswith(".cs") else file_name
             return base, dir_path
 
     # Fall back: remove extension from name if present and return given path
@@ -193,11 +197,13 @@ def apply_edits_locally(original_text: str, edits: list[dict[str, Any]]) -> str:
     text = original_text
     for edit in edits or []:
         op = (
-            (edit.get("op")
-             or edit.get("operation")
-             or edit.get("type")
-             or edit.get("mode")
-             or "")
+            (
+                edit.get("op")
+                or edit.get("operation")
+                or edit.get("type")
+                or edit.get("mode")
+                or ""
+            )
             .strip()
             .lower()
         )
@@ -210,8 +216,9 @@ def apply_edits_locally(original_text: str, edits: list[dict[str, Any]]) -> str:
 
         if op == "prepend":
             prepend_text = edit.get("text", "")
-            text = (prepend_text if prepend_text.endswith(
-                "\n") else prepend_text + "\n") + text
+            text = (
+                prepend_text if prepend_text.endswith("\n") else prepend_text + "\n"
+            ) + text
         elif op == "append":
             append_text = edit.get("text", "")
             if not text.endswith("\n"):
@@ -223,12 +230,12 @@ def apply_edits_locally(original_text: str, edits: list[dict[str, Any]]) -> str:
             anchor = edit.get("anchor", "")
             position = (edit.get("position") or "before").lower()
             insert_text = edit.get("text", "")
-            flags = re.MULTILINE | (
-                re.IGNORECASE if edit.get("ignore_case") else 0)
+            flags = re.MULTILINE | (re.IGNORECASE if edit.get("ignore_case") else 0)
 
             # Find the best match using improved heuristics
             match = find_best_anchor_match(
-                anchor, text, flags, bool(edit.get("prefer_last", True)))
+                anchor, text, flags, bool(edit.get("prefer_last", True))
+            )
             if not match:
                 if edit.get("allow_noop", True):
                     continue
@@ -243,14 +250,20 @@ def apply_edits_locally(original_text: str, edits: list[dict[str, Any]]) -> str:
             replacement = edit.get("text", "")
             lines = text.splitlines(keepends=True)
             max_line = len(lines) + 1  # 1-based, exclusive end
-            if (start_line < 1 or end_line < start_line or end_line > max_line
-                    or start_col < 1 or end_col < 1):
+            if (
+                start_line < 1
+                or end_line < start_line
+                or end_line > max_line
+                or start_col < 1
+                or end_col < 1
+            ):
                 raise RuntimeError("replace_range out of bounds")
 
             def index_of(line: int, col: int, lines_ref: list[str] = lines) -> int:
                 if line <= len(lines_ref):
                     return sum(len(ln) for ln in lines_ref[: line - 1]) + (col - 1)
                 return sum(len(ln) for ln in lines_ref)
+
             a = index_of(start_line, start_col)
             b = index_of(end_line, end_col)
             text = text[:a] + replacement + text[b:]
@@ -267,11 +280,14 @@ def apply_edits_locally(original_text: str, edits: list[dict[str, Any]]) -> str:
         else:
             allowed = "anchor_insert, prepend, append, replace_range, regex_replace"
             raise RuntimeError(
-                f"unknown edit op: {op}; allowed: {allowed}. Use 'op' (aliases accepted: type/mode/operation).")
+                f"unknown edit op: {op}; allowed: {allowed}. Use 'op' (aliases accepted: type/mode/operation)."
+            )
     return text
 
 
-def find_best_anchor_match(pattern: str, text: str, flags: int, prefer_last: bool = True):
+def find_best_anchor_match(
+    pattern: str, text: str, flags: int, prefer_last: bool = True
+):
     """
     Find the best anchor match using improved heuristics.
 
@@ -284,7 +300,7 @@ def find_best_anchor_match(pattern: str, text: str, flags: int, prefer_last: boo
 
     Args:
         pattern: Regex pattern to search for
-        text: Text to search in  
+        text: Text to search in
         flags: Regex flags
         prefer_last: If True, prefer the last match over the first
 
@@ -302,8 +318,9 @@ def find_best_anchor_match(pattern: str, text: str, flags: int, prefer_last: boo
         return matches[0]
 
     # For patterns that look like they're trying to match closing braces at end of lines
-    is_closing_brace_pattern = '}' in pattern and (
-        '$' in pattern or pattern.endswith(r'\s*'))
+    is_closing_brace_pattern = "}" in pattern and (
+        "$" in pattern or pattern.endswith(r"\s*")
+    )
 
     if is_closing_brace_pattern and prefer_last:
         # Use heuristics to find the best closing brace match
@@ -319,7 +336,7 @@ def _find_best_closing_brace_match(matches, text: str):
 
     Enhanced heuristics for scope-aware matching:
     1. Prefer matches with lower indentation (likely class-level)
-    2. Prefer matches closer to end of file  
+    2. Prefer matches closer to end of file
     3. Avoid matches that seem to be inside method bodies
     4. For #endregion patterns, ensure class-level context
     5. Validate insertion point is at appropriate scope
@@ -336,12 +353,12 @@ def _find_best_closing_brace_match(matches, text: str):
 
     scored_matches = []
     lines = text.splitlines()
-    
+
     # Optimization: Precompute line start indices for O(log L) line lookup
     # Instead of text[:pos].count('\n') which is O(N) per match
     line_starts = [0]
     for i, char in enumerate(text):
-        if char == '\n':
+        if char == "\n":
             line_starts.append(i + 1)
 
     for match in matches:

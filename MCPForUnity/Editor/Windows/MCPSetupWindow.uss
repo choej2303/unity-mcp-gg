@@ -96,8 +96,21 @@
 }
 
 /* Button sizing */
+/* Button sizing */
 .setup-button {
-    width: 96px;
+    min-width: 96px;
+    padding: 6px 16px;
+    transition-duration: 0.1s;
+}
+
+.setup-button:hover {
+    background-color: #4f4f4f;
+    scale: 1.02;
+}
+
+.setup-button:active {
+    background-color: #303030;
+    scale: 0.98;
 }
 
 /* Description text spacing */

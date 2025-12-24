@@ -6,9 +6,14 @@ import functools
 import inspect
 import logging
 import time
-from typing import Callable, Any
+from typing import Any, Callable
 
-from core.telemetry import record_resource_usage, record_tool_usage, record_milestone, MilestoneType
+from core.telemetry import (
+    MilestoneType,
+    record_milestone,
+    record_resource_usage,
+    record_tool_usage,
+)
 
 _log = logging.getLogger("unity-mcp-telemetry")
 _decorator_log_count = 0
@@ -16,6 +21,7 @@ _decorator_log_count = 0
 
 def telemetry_tool(tool_name: str):
     """Decorator to add telemetry tracking to MCP tools"""
+
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         def _sync_wrapper(*args, **kwargs) -> Any:
@@ -43,8 +49,7 @@ def telemetry_tool(tool_name: str):
                     if tool_name == "manage_script" and action_val == "create":
                         record_milestone(MilestoneType.FIRST_SCRIPT_CREATION)
                     elif tool_name.startswith("manage_scene"):
-                        record_milestone(
-                            MilestoneType.FIRST_SCENE_MODIFICATION)
+                        record_milestone(MilestoneType.FIRST_SCENE_MODIFICATION)
                     record_milestone(MilestoneType.FIRST_TOOL_USAGE)
                 except Exception:
                     _log.debug("milestone emit failed", exc_info=True)
@@ -55,8 +60,9 @@ def telemetry_tool(tool_name: str):
             finally:
                 duration_ms = (time.time() - start_time) * 1000
                 try:
-                    record_tool_usage(tool_name, success,
-                                      duration_ms, error, sub_action=sub_action)
+                    record_tool_usage(
+                        tool_name, success, duration_ms, error, sub_action=sub_action
+                    )
                 except Exception:
                     _log.debug("record_tool_usage failed", exc_info=True)
 
@@ -86,8 +92,7 @@ def telemetry_tool(tool_name: str):
                     if tool_name == "manage_script" and action_val == "create":
                         record_milestone(MilestoneType.FIRST_SCRIPT_CREATION)
                     elif tool_name.startswith("manage_scene"):
-                        record_milestone(
-                            MilestoneType.FIRST_SCENE_MODIFICATION)
+                        record_milestone(MilestoneType.FIRST_SCENE_MODIFICATION)
                     record_milestone(MilestoneType.FIRST_TOOL_USAGE)
                 except Exception:
                     _log.debug("milestone emit failed", exc_info=True)
@@ -98,17 +103,20 @@ def telemetry_tool(tool_name: str):
             finally:
                 duration_ms = (time.time() - start_time) * 1000
                 try:
-                    record_tool_usage(tool_name, success,
-                                      duration_ms, error, sub_action=sub_action)
+                    record_tool_usage(
+                        tool_name, success, duration_ms, error, sub_action=sub_action
+                    )
                 except Exception:
                     _log.debug("record_tool_usage failed", exc_info=True)
 
         return _async_wrapper if inspect.iscoroutinefunction(func) else _sync_wrapper
+
     return decorator
 
 
 def telemetry_resource(resource_name: str):
     """Decorator to add telemetry tracking to MCP resources"""
+
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         def _sync_wrapper(*args, **kwargs) -> Any:
@@ -118,8 +126,7 @@ def telemetry_resource(resource_name: str):
             try:
                 global _decorator_log_count
                 if _decorator_log_count < 10:
-                    _log.info(
-                        f"telemetry_decorator sync: resource={resource_name}")
+                    _log.info(f"telemetry_decorator sync: resource={resource_name}")
                     _decorator_log_count += 1
                 result = func(*args, **kwargs)
                 success = True
@@ -130,8 +137,7 @@ def telemetry_resource(resource_name: str):
             finally:
                 duration_ms = (time.time() - start_time) * 1000
                 try:
-                    record_resource_usage(resource_name, success,
-                                          duration_ms, error)
+                    record_resource_usage(resource_name, success, duration_ms, error)
                 except Exception:
                     _log.debug("record_resource_usage failed", exc_info=True)
 
@@ -143,8 +149,7 @@ def telemetry_resource(resource_name: str):
             try:
                 global _decorator_log_count
                 if _decorator_log_count < 10:
-                    _log.info(
-                        f"telemetry_decorator async: resource={resource_name}")
+                    _log.info(f"telemetry_decorator async: resource={resource_name}")
                     _decorator_log_count += 1
                 result = await func(*args, **kwargs)
                 success = True
@@ -155,10 +160,10 @@ def telemetry_resource(resource_name: str):
             finally:
                 duration_ms = (time.time() - start_time) * 1000
                 try:
-                    record_resource_usage(resource_name, success,
-                                          duration_ms, error)
+                    record_resource_usage(resource_name, success, duration_ms, error)
                 except Exception:
                     _log.debug("record_resource_usage failed", exc_info=True)
 
         return _async_wrapper if inspect.iscoroutinefunction(func) else _sync_wrapper
+
     return decorator

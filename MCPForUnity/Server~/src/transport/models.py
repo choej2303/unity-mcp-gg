@@ -1,5 +1,7 @@
 from typing import Any
+
 from pydantic import BaseModel, Field
+
 from models.models import ToolDefinitionModel
 
 # Outgoing (Server -> Plugin)
@@ -22,6 +24,7 @@ class ExecuteCommandMessage(BaseModel):
     name: str
     params: dict[str, Any]
     timeout: float
+
 
 # Incoming (Plugin -> Server)
 
@@ -47,6 +50,7 @@ class CommandResultMessage(BaseModel):
     type: str = "command_result"
     id: str
     result: dict[str, Any] = Field(default_factory=dict)
+
 
 # Session Info (API response)
 

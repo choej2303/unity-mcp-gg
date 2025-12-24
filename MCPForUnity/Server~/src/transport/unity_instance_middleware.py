@@ -4,8 +4,9 @@ Middleware for managing Unity instance selection per session.
 This middleware intercepts all tool calls and injects the active Unity instance
 into the request-scoped state, allowing tools to access it via ctx.get_state("unity_instance").
 """
-from threading import RLock
+
 import logging
+from threading import RLock
 
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 
@@ -19,7 +20,7 @@ _unity_instance_middleware = None
 _middleware_lock = RLock()
 
 
-def get_unity_instance_middleware() -> 'UnityInstanceMiddleware':
+def get_unity_instance_middleware() -> "UnityInstanceMiddleware":
     """Get the global Unity instance middleware."""
     global _unity_instance_middleware
     if _unity_instance_middleware is None:
@@ -27,11 +28,11 @@ def get_unity_instance_middleware() -> 'UnityInstanceMiddleware':
             if _unity_instance_middleware is None:
                 # Auto-initialize if not set (lazy singleton) to handle import order or test cases
                 _unity_instance_middleware = UnityInstanceMiddleware()
-        
+
     return _unity_instance_middleware
 
 
-def set_unity_instance_middleware(middleware: 'UnityInstanceMiddleware') -> None:
+def set_unity_instance_middleware(middleware: "UnityInstanceMiddleware") -> None:
     """Set the global Unity instance middleware (called during server initialization)."""
     global _unity_instance_middleware
     _unity_instance_middleware = middleware
@@ -93,7 +94,7 @@ class UnityInstanceMiddleware(Middleware):
             # But for stdio transport (no PluginHub needed or maybe partially configured),
             # we should be careful not to clear instance just because PluginHub can't resolve it.
             # The 'active_instance' (Name@hash) might be valid for stdio even if PluginHub fails.
-            
+
             session_id: str | None = None
             # Only validate via PluginHub if we are actually using HTTP transport
             # OR if we want to support hybrid mode. For now, let's be permissive.
@@ -123,7 +124,7 @@ class UnityInstanceMiddleware(Middleware):
                         "Unexpected error during PluginHub session resolution for %s: %s",
                         active_instance,
                         exc,
-                        exc_info=True
+                        exc_info=True,
                     )
 
             ctx.set_state("unity_instance", active_instance)

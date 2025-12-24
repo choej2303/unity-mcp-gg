@@ -1,14 +1,15 @@
-from transport.legacy.unity_connection import UnityConnection
-import sys
 import json
-import struct
+import select
 import socket
+import struct
+import sys
 import threading
 import time
-import select
 from pathlib import Path
 
 import pytest
+
+from transport.legacy.unity_connection import UnityConnection
 
 # locate server src dynamically to avoid hardcoded layout assumptions
 ROOT = Path(__file__).resolve().parents[1]

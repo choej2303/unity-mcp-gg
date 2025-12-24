@@ -8,16 +8,14 @@ from fastmcp import Context
 from services.registry import mcp_for_unity_tool
 from services.tools import get_unity_instance_from_context
 from services.tools.utils import (
-    parse_json_payload,
+    _DOLLAR_BACKREF_PATTERN,
     apply_edits_locally,
-    normalize_script_locator,
     find_best_anchor_match,
-    _DOLLAR_BACKREF_PATTERN
+    normalize_script_locator,
+    parse_json_payload,
 )
-from transport.unity_transport import send_with_unity_instance
 from transport.legacy.unity_connection import async_send_command_with_retry
-
-
+from transport.unity_transport import send_with_unity_instance
 
 
 def _infer_class_name(script_name: str) -> str:
@@ -29,15 +27,16 @@ def _extract_code_after(keyword: str, request: str) -> str:
     # Deprecated with NL removal; retained as no-op for compatibility
     idx = request.lower().find(keyword)
     if idx >= 0:
-        return request[idx + len(keyword):].strip()
+        return request[idx + len(keyword) :].strip()
     return ""
+
+
 # Removed _is_structurally_balanced - validation now handled by C# side using Unity's compiler services
 
 
-
-
-
-def _with_norm(resp: dict[str, Any] | Any, edits: list[dict[str, Any]], routing: str | None = None) -> dict[str, Any] | Any:
+def _with_norm(
+    resp: dict[str, Any] | Any, edits: list[dict[str, Any]], routing: str | None = None
+) -> dict[str, Any] | Any:
     if not isinstance(resp, dict):
         return resp
     data = resp.setdefault("data", {})
@@ -47,10 +46,17 @@ def _with_norm(resp: dict[str, Any] | Any, edits: list[dict[str, Any]], routing:
     return resp
 
 
-def _err(code: str, message: str, *, expected: dict[str, Any] | None = None, rewrite: dict[str, Any] | None = None,
-         normalized: list[dict[str, Any]] | None = None, routing: str | None = None, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    payload: dict[str, Any] = {"success": False,
-                               "code": code, "message": message}
+def _err(
+    code: str,
+    message: str,
+    *,
+    expected: dict[str, Any] | None = None,
+    rewrite: dict[str, Any] | None = None,
+    normalized: list[dict[str, Any]] | None = None,
+    routing: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"success": False, "code": code, "message": message}
     data: dict[str, Any] = {}
     if expected:
         data["expected"] = expected
@@ -71,9 +77,14 @@ def _unwrap_and_alias(edit: dict[str, Any]) -> dict[str, Any]:
     """Unwrap single-key wrappers and normalize field aliases."""
     # Unwrap single-key wrappers like {"replace_method": {...}}
     for wrapper_key in (
-        "replace_method", "insert_method", "delete_method",
-        "replace_class", "delete_class",
-        "anchor_insert", "anchor_replace", "anchor_delete",
+        "replace_method",
+        "insert_method",
+        "delete_method",
+        "replace_class",
+        "delete_class",
+        "anchor_insert",
+        "anchor_replace",
+        "anchor_delete",
     ):
         if wrapper_key in edit and isinstance(edit[wrapper_key], dict):
             inner = dict(edit[wrapper_key])
@@ -82,8 +93,11 @@ def _unwrap_and_alias(edit: dict[str, Any]) -> dict[str, Any]:
             break
 
     e = dict(edit)
-    op = (e.get("op") or e.get("operation") or e.get(
-        "type") or e.get("mode") or "").strip().lower()
+    op = (
+        (e.get("op") or e.get("operation") or e.get("type") or e.get("mode") or "")
+        .strip()
+        .lower()
+    )
     if op:
         e["op"] = op
 
@@ -124,7 +138,12 @@ def _unwrap_and_alias(edit: dict[str, Any]) -> dict[str, Any]:
             e["afterMethodName"] = anchor
     if "anchorText" in e and "anchor" not in e:
         e["anchor"] = e.pop("anchorText")
-    if "pattern" in e and "anchor" not in e and e.get("op") and e["op"].startswith("anchor_"):
+    if (
+        "pattern" in e
+        and "anchor" not in e
+        and e.get("op")
+        and e["op"].startswith("anchor_")
+    ):
         e["anchor"] = e.pop("pattern")
     if "newText" in e and "text" not in e:
         e["text"] = e.pop("newText")
@@ -154,16 +173,27 @@ def _unwrap_and_alias(edit: dict[str, Any]) -> dict[str, Any]:
     return e
 
 
-def _normalize_edits(raw_edits: list[dict[str, Any]], script_name: str) -> list[dict[str, Any]]:
+def _normalize_edits(
+    raw_edits: list[dict[str, Any]], script_name: str
+) -> list[dict[str, Any]]:
     """Normalize a list of raw edits: unwrap, alias fields, and apply default values."""
     normalized_edits: list[dict[str, Any]] = []
     for raw in raw_edits or []:
         e = _unwrap_and_alias(raw)
-        op = (e.get("op") or e.get("operation") or e.get(
-            "type") or e.get("mode") or "").strip().lower()
+        op = (
+            (e.get("op") or e.get("operation") or e.get("type") or e.get("mode") or "")
+            .strip()
+            .lower()
+        )
 
         # Default className to script name if missing on structured method/class ops
-        if op in ("replace_class", "delete_class", "replace_method", "delete_method", "insert_method") and not e.get("className"):
+        if op in (
+            "replace_class",
+            "delete_class",
+            "replace_method",
+            "delete_method",
+            "insert_method",
+        ) and not e.get("className"):
             e["className"] = script_name
 
         # Map common aliases for text ops
@@ -181,18 +211,23 @@ def _normalize_edits(raw_edits: list[dict[str, Any]], script_name: str) -> list[
                 e["replacement"] = e.get("text", "")
             elif "insert" in e or "content" in e:
                 e["replacement"] = e.get("insert") or e.get("content") or ""
-        if op == "anchor_insert" and not (e.get("text") or e.get("insert") or e.get("content") or e.get("replacement")):
+        if op == "anchor_insert" and not (
+            e.get("text") or e.get("insert") or e.get("content") or e.get("replacement")
+        ):
             e["op"] = "anchor_delete"
             normalized_edits.append(e)
             continue
         normalized_edits.append(e)
     return normalized_edits
 
+
 # Natural-language parsing removed; clients should send structured edits.
 
 
-@mcp_for_unity_tool(name="script_apply_edits", description=(
-    """Structured C# edits (methods/classes) with safer boundaries - prefer this over raw text.
+@mcp_for_unity_tool(
+    name="script_apply_edits",
+    description=(
+        """Structured C# edits (methods/classes) with safer boundaries - prefer this over raw text.
     Best practices:
     - Prefer anchor_* ops for pattern-based insert/replace near stable markers
     - Use replace_method/delete_method for whole-method changes (keeps signatures balanced)
@@ -238,38 +273,51 @@ def _normalize_edits(raw_edits: list[dict[str, Any]], script_name: str) -> list[
     ],
     }
     ]"""
-))
+    ),
+)
 async def script_apply_edits(
     ctx: Context,
     name: Annotated[str, "Name of the script to edit"],
     path: Annotated[str, "Path to the script to edit under Assets/ directory"],
-    edits: Annotated[Union[list[dict[str, Any]], str], "List of edits to apply to the script (JSON list or stringified JSON)"],
-    options: Annotated[dict[str, Any],
-                       "Options for the script edit"] | None = None,
-    script_type: Annotated[str,
-                           "Type of the script to edit"] = "MonoBehaviour",
-    namespace: Annotated[str,
-                         "Namespace of the script to edit"] | None = None,
+    edits: Annotated[
+        Union[list[dict[str, Any]], str],
+        "List of edits to apply to the script (JSON list or stringified JSON)",
+    ],
+    options: Annotated[dict[str, Any], "Options for the script edit"] | None = None,
+    script_type: Annotated[str, "Type of the script to edit"] = "MonoBehaviour",
+    namespace: Annotated[str, "Namespace of the script to edit"] | None = None,
 ) -> dict[str, Any]:
     unity_instance = get_unity_instance_from_context(ctx)
     await ctx.info(
-        f"Processing script_apply_edits: {name} (unity_instance={unity_instance or 'default'})")
-        
+        f"Processing script_apply_edits: {name} (unity_instance={unity_instance or 'default'})"
+    )
+
     # Parse edits if they came as a stringified JSON
     edits = parse_json_payload(edits)
     if not isinstance(edits, list):
-        return {"success": False, "message": f"Edits must be a list or JSON string of a list, got {type(edits)}"}
+        return {
+            "success": False,
+            "message": f"Edits must be a list or JSON string of a list, got {type(edits)}",
+        }
 
     # Normalize locator first so downstream calls target the correct script file.
     name, path = normalize_script_locator(name, path)
-    
+
     # Normalize edits using extracted helper function
     edits = _normalize_edits(edits, name)
     normalized_for_echo = edits
 
     # Validate required fields and produce machine-parsable hints
-    def error_with_hint(message: str, expected: dict[str, Any], suggestion: dict[str, Any]) -> dict[str, Any]:
-        return _err("missing_field", message, expected=expected, rewrite=suggestion, normalized=normalized_for_echo)
+    def error_with_hint(
+        message: str, expected: dict[str, Any], suggestion: dict[str, Any]
+    ) -> dict[str, Any]:
+        return _err(
+            "missing_field",
+            message,
+            expected=expected,
+            rewrite=suggestion,
+            normalized=normalized_for_echo,
+        )
 
     for e in edits or []:
         op = e.get("op", "")
@@ -277,65 +325,90 @@ async def script_apply_edits(
             if not e.get("methodName"):
                 return error_with_hint(
                     "replace_method requires 'methodName'.",
-                    {"op": "replace_method", "required": [
-                        "className", "methodName", "replacement"]},
-                    {"edits[0].methodName": "HasTarget"}
+                    {
+                        "op": "replace_method",
+                        "required": ["className", "methodName", "replacement"],
+                    },
+                    {"edits[0].methodName": "HasTarget"},
                 )
             if not (e.get("replacement") or e.get("text")):
                 return error_with_hint(
                     "replace_method requires 'replacement' (inline or base64).",
-                    {"op": "replace_method", "required": [
-                        "className", "methodName", "replacement"]},
-                    {"edits[0].replacement": "public bool X(){ return true; }"}
+                    {
+                        "op": "replace_method",
+                        "required": ["className", "methodName", "replacement"],
+                    },
+                    {"edits[0].replacement": "public bool X(){ return true; }"},
                 )
         elif op == "insert_method":
             if not (e.get("replacement") or e.get("text")):
                 return error_with_hint(
                     "insert_method requires a non-empty 'replacement'.",
-                    {"op": "insert_method", "required": ["className", "replacement"], "position": {
-                        "after_requires": "afterMethodName", "before_requires": "beforeMethodName"}},
-                    {"edits[0].replacement": "public void PrintSeries(){ Debug.Log(\"1,2,3\"); }"}
+                    {
+                        "op": "insert_method",
+                        "required": ["className", "replacement"],
+                        "position": {
+                            "after_requires": "afterMethodName",
+                            "before_requires": "beforeMethodName",
+                        },
+                    },
+                    {
+                        "edits[0].replacement": 'public void PrintSeries(){ Debug.Log("1,2,3"); }'
+                    },
                 )
             pos = (e.get("position") or "").lower()
             if pos == "after" and not e.get("afterMethodName"):
                 return error_with_hint(
                     "insert_method with position='after' requires 'afterMethodName'.",
-                    {"op": "insert_method", "position": {
-                        "after_requires": "afterMethodName"}},
-                    {"edits[0].afterMethodName": "GetCurrentTarget"}
+                    {
+                        "op": "insert_method",
+                        "position": {"after_requires": "afterMethodName"},
+                    },
+                    {"edits[0].afterMethodName": "GetCurrentTarget"},
                 )
             if pos == "before" and not e.get("beforeMethodName"):
                 return error_with_hint(
                     "insert_method with position='before' requires 'beforeMethodName'.",
-                    {"op": "insert_method", "position": {
-                        "before_requires": "beforeMethodName"}},
-                    {"edits[0].beforeMethodName": "GetCurrentTarget"}
+                    {
+                        "op": "insert_method",
+                        "position": {"before_requires": "beforeMethodName"},
+                    },
+                    {"edits[0].beforeMethodName": "GetCurrentTarget"},
                 )
         elif op == "delete_method":
             if not e.get("methodName"):
                 return error_with_hint(
                     "delete_method requires 'methodName'.",
-                    {"op": "delete_method", "required": [
-                        "className", "methodName"]},
-                    {"edits[0].methodName": "PrintSeries"}
+                    {"op": "delete_method", "required": ["className", "methodName"]},
+                    {"edits[0].methodName": "PrintSeries"},
                 )
         elif op in ("anchor_insert", "anchor_replace", "anchor_delete"):
             if not e.get("anchor"):
                 return error_with_hint(
                     f"{op} requires 'anchor' (regex).",
                     {"op": op, "required": ["anchor"]},
-                    {"edits[0].anchor": "(?m)^\\s*public\\s+bool\\s+HasTarget\\s*\\("}
+                    {"edits[0].anchor": "(?m)^\\s*public\\s+bool\\s+HasTarget\\s*\\("},
                 )
-            if op in ("anchor_insert", "anchor_replace") and not (e.get("text") or e.get("replacement")):
+            if op in ("anchor_insert", "anchor_replace") and not (
+                e.get("text") or e.get("replacement")
+            ):
                 return error_with_hint(
                     f"{op} requires 'text'.",
                     {"op": op, "required": ["anchor", "text"]},
-                    {"edits[0].text": "/* comment */\n"}
+                    {"edits[0].text": "/* comment */\n"},
                 )
 
     # Decide routing: structured vs text vs mixed
-    STRUCT = {"replace_class", "delete_class", "replace_method", "delete_method",
-              "insert_method", "anchor_delete", "anchor_replace", "anchor_insert"}
+    STRUCT = {
+        "replace_class",
+        "delete_class",
+        "replace_method",
+        "delete_method",
+        "insert_method",
+        "anchor_delete",
+        "anchor_replace",
+        "anchor_insert",
+    }
     TEXT = {"prepend", "append", "replace_range", "regex_replace"}
     ops_set = {(e.get("op") or "").lower() for e in edits or []}
     all_struct = ops_set.issubset(STRUCT)
@@ -364,25 +437,39 @@ async def script_apply_edits(
         )
         if isinstance(resp_struct, dict) and resp_struct.get("success"):
             pass  # Optional sentinel reload removed (deprecated)
-        return _with_norm(resp_struct if isinstance(resp_struct, dict) else {"success": False, "message": str(resp_struct)}, normalized_for_echo, routing="structured")
+        return _with_norm(
+            (
+                resp_struct
+                if isinstance(resp_struct, dict)
+                else {"success": False, "message": str(resp_struct)}
+            ),
+            normalized_for_echo,
+            routing="structured",
+        )
 
     # 1) read from Unity
-    read_resp = await async_send_command_with_retry("manage_script", {
-        "action": "read",
-        "name": name,
-        "path": path,
-        "namespace": namespace,
-        "scriptType": script_type,
-    }, instance_id=unity_instance)
+    read_resp = await async_send_command_with_retry(
+        "manage_script",
+        {
+            "action": "read",
+            "name": name,
+            "path": path,
+            "namespace": namespace,
+            "scriptType": script_type,
+        },
+        instance_id=unity_instance,
+    )
     if not isinstance(read_resp, dict) or not read_resp.get("success"):
-        return read_resp if isinstance(read_resp, dict) else {"success": False, "message": str(read_resp)}
+        return (
+            read_resp
+            if isinstance(read_resp, dict)
+            else {"success": False, "message": str(read_resp)}
+        )
 
-    data = read_resp.get("data") or read_resp.get(
-        "result", {}).get("data") or {}
+    data = read_resp.get("data") or read_resp.get("result", {}).get("data") or {}
     contents = data.get("contents")
     if contents is None and data.get("contentsEncoded") and data.get("encodedContents"):
-        contents = base64.b64decode(
-            data["encodedContents"]).decode("utf-8")
+        contents = base64.b64decode(data["encodedContents"]).decode("utf-8")
     if contents is None:
         return {"success": False, "message": "No contents returned from Unity read."}
 
@@ -391,39 +478,72 @@ async def script_apply_edits(
 
     # If we have a mixed batch (TEXT + STRUCT), apply text first with precondition, then structured
     if mixed:
-        text_edits = [e for e in edits or [] if (
-            e.get("op") or "").lower() in TEXT]
-        struct_edits = [e for e in edits or [] if (
-            e.get("op") or "").lower() in STRUCT]
+        text_edits = [e for e in edits or [] if (e.get("op") or "").lower() in TEXT]
+        struct_edits = [e for e in edits or [] if (e.get("op") or "").lower() in STRUCT]
         try:
             base_text = contents
 
             def line_col_from_index(idx: int) -> tuple[int, int]:
                 line = base_text.count("\n", 0, idx) + 1
                 last_nl = base_text.rfind("\n", 0, idx)
-                col = (idx - (last_nl + 1)) + \
-                    1 if last_nl >= 0 else idx + 1
+                col = (idx - (last_nl + 1)) + 1 if last_nl >= 0 else idx + 1
                 return line, col
 
             at_edits: list[dict[str, Any]] = []
             for e in text_edits:
-                opx = (e.get("op") or e.get("operation") or e.get(
-                    "type") or e.get("mode") or "").strip().lower()
-                text_field = e.get("text") or e.get("insert") or e.get(
-                    "content") or e.get("replacement") or ""
+                opx = (
+                    (
+                        e.get("op")
+                        or e.get("operation")
+                        or e.get("type")
+                        or e.get("mode")
+                        or ""
+                    )
+                    .strip()
+                    .lower()
+                )
+                text_field = (
+                    e.get("text")
+                    or e.get("insert")
+                    or e.get("content")
+                    or e.get("replacement")
+                    or ""
+                )
                 if opx == "anchor_insert":
                     anchor = e.get("anchor") or ""
                     position = (e.get("position") or "after").lower()
                     flags = re.MULTILINE | (
-                        re.IGNORECASE if e.get("ignore_case") else 0)
+                        re.IGNORECASE if e.get("ignore_case") else 0
+                    )
                     try:
                         # Use improved anchor matching logic
                         m = find_best_anchor_match(
-                            anchor, base_text, flags, prefer_last=True)
+                            anchor, base_text, flags, prefer_last=True
+                        )
                     except Exception as ex:
-                        return _with_norm(_err("bad_regex", f"Invalid anchor regex: {ex}", normalized=normalized_for_echo, routing="mixed/text-first", extra={"hint": "Escape parentheses/braces or use a simpler anchor."}), normalized_for_echo, routing="mixed/text-first")
+                        return _with_norm(
+                            _err(
+                                "bad_regex",
+                                f"Invalid anchor regex: {ex}",
+                                normalized=normalized_for_echo,
+                                routing="mixed/text-first",
+                                extra={
+                                    "hint": "Escape parentheses/braces or use a simpler anchor."
+                                },
+                            ),
+                            normalized_for_echo,
+                            routing="mixed/text-first",
+                        )
                     if not m:
-                        return _with_norm({"success": False, "code": "anchor_not_found", "message": f"anchor not found: {anchor}"}, normalized_for_echo, routing="mixed/text-first")
+                        return _with_norm(
+                            {
+                                "success": False,
+                                "code": "anchor_not_found",
+                                "message": f"anchor not found: {anchor}",
+                            },
+                            normalized_for_echo,
+                            routing="mixed/text-first",
+                        )
                     idx = m.start() if position == "before" else m.end()
                     # Normalize insertion to avoid jammed methods
                     text_field_norm = text_field
@@ -433,56 +553,125 @@ async def script_apply_edits(
                         text_field_norm = text_field_norm + "\n"
                     sl, sc = line_col_from_index(idx)
                     at_edits.append(
-                        {"startLine": sl, "startCol": sc, "endLine": sl, "endCol": sc, "newText": text_field_norm})
+                        {
+                            "startLine": sl,
+                            "startCol": sc,
+                            "endLine": sl,
+                            "endCol": sc,
+                            "newText": text_field_norm,
+                        }
+                    )
                     # do not mutate base_text when building atomic spans
                 elif opx == "replace_range":
-                    if all(k in e for k in ("startLine", "startCol", "endLine", "endCol")):
-                        at_edits.append({
-                            "startLine": int(e.get("startLine", 1)),
-                            "startCol": int(e.get("startCol", 1)),
-                            "endLine": int(e.get("endLine", 1)),
-                            "endCol": int(e.get("endCol", 1)),
-                            "newText": text_field
-                        })
+                    if all(
+                        k in e for k in ("startLine", "startCol", "endLine", "endCol")
+                    ):
+                        at_edits.append(
+                            {
+                                "startLine": int(e.get("startLine", 1)),
+                                "startCol": int(e.get("startCol", 1)),
+                                "endLine": int(e.get("endLine", 1)),
+                                "endCol": int(e.get("endCol", 1)),
+                                "newText": text_field,
+                            }
+                        )
                     else:
-                        return _with_norm(_err("missing_field", "replace_range requires startLine/startCol/endLine/endCol", normalized=normalized_for_echo, routing="mixed/text-first"), normalized_for_echo, routing="mixed/text-first")
+                        return _with_norm(
+                            _err(
+                                "missing_field",
+                                "replace_range requires startLine/startCol/endLine/endCol",
+                                normalized=normalized_for_echo,
+                                routing="mixed/text-first",
+                            ),
+                            normalized_for_echo,
+                            routing="mixed/text-first",
+                        )
                 elif opx == "regex_replace":
                     pattern = e.get("pattern") or ""
                     try:
-                        regex_obj = re.compile(pattern, re.MULTILINE | (
-                            re.IGNORECASE if e.get("ignore_case") else 0))
+                        regex_obj = re.compile(
+                            pattern,
+                            re.MULTILINE
+                            | (re.IGNORECASE if e.get("ignore_case") else 0),
+                        )
                     except Exception as ex:
-                        return _with_norm(_err("bad_regex", f"Invalid regex pattern: {ex}", normalized=normalized_for_echo, routing="mixed/text-first", extra={"hint": "Escape special chars or prefer structured delete for methods."}), normalized_for_echo, routing="mixed/text-first")
+                        return _with_norm(
+                            _err(
+                                "bad_regex",
+                                f"Invalid regex pattern: {ex}",
+                                normalized=normalized_for_echo,
+                                routing="mixed/text-first",
+                                extra={
+                                    "hint": "Escape special chars or prefer structured delete for methods."
+                                },
+                            ),
+                            normalized_for_echo,
+                            routing="mixed/text-first",
+                        )
                     m = regex_obj.search(base_text)
                     if not m:
                         continue
                     # Expand $1, $2... in replacement using this match
 
                     def _expand_dollars(rep: str, _m=m) -> str:
-                        return _DOLLAR_BACKREF_PATTERN.sub(lambda g: _m.group(int(g.group(1))) or "", rep)
+                        return _DOLLAR_BACKREF_PATTERN.sub(
+                            lambda g: _m.group(int(g.group(1))) or "", rep
+                        )
+
                     repl = _expand_dollars(text_field)
                     sl, sc = line_col_from_index(m.start())
                     el, ec = line_col_from_index(m.end())
                     at_edits.append(
-                        {"startLine": sl, "startCol": sc, "endLine": el, "endCol": ec, "newText": repl})
+                        {
+                            "startLine": sl,
+                            "startCol": sc,
+                            "endLine": el,
+                            "endCol": ec,
+                            "newText": repl,
+                        }
+                    )
                     # do not mutate base_text when building atomic spans
                 elif opx in ("prepend", "append"):
                     if opx == "prepend":
                         sl, sc = 1, 1
                         at_edits.append(
-                            {"startLine": sl, "startCol": sc, "endLine": sl, "endCol": sc, "newText": text_field})
+                            {
+                                "startLine": sl,
+                                "startCol": sc,
+                                "endLine": sl,
+                                "endCol": sc,
+                                "newText": text_field,
+                            }
+                        )
                         # prepend can be applied atomically without local mutation
                     else:
                         # Insert at true EOF position (handles both \n and \r\n correctly)
                         eof_idx = len(base_text)
                         sl, sc = line_col_from_index(eof_idx)
-                        new_text = ("\n" if not base_text.endswith(
-                            "\n") else "") + text_field
+                        new_text = (
+                            "\n" if not base_text.endswith("\n") else ""
+                        ) + text_field
                         at_edits.append(
-                            {"startLine": sl, "startCol": sc, "endLine": sl, "endCol": sc, "newText": new_text})
+                            {
+                                "startLine": sl,
+                                "startCol": sc,
+                                "endLine": sl,
+                                "endCol": sc,
+                                "newText": new_text,
+                            }
+                        )
                         # do not mutate base_text when building atomic spans
                 else:
-                    return _with_norm(_err("unknown_op", f"Unsupported text edit op: {opx}", normalized=normalized_for_echo, routing="mixed/text-first"), normalized_for_echo, routing="mixed/text-first")
+                    return _with_norm(
+                        _err(
+                            "unknown_op",
+                            f"Unsupported text edit op: {opx}",
+                            normalized=normalized_for_echo,
+                            routing="mixed/text-first",
+                        ),
+                        normalized_for_echo,
+                        routing="mixed/text-first",
+                    )
 
             sha = hashlib.sha256(base_text.encode("utf-8")).hexdigest()
             if at_edits:
@@ -494,7 +683,15 @@ async def script_apply_edits(
                     "scriptType": script_type,
                     "edits": at_edits,
                     "precondition_sha256": sha,
-                    "options": {"refresh": (options or {}).get("refresh", "debounced"), "validate": (options or {}).get("validate", "standard"), "applyMode": ("atomic" if len(at_edits) > 1 else (options or {}).get("applyMode", "sequential"))}
+                    "options": {
+                        "refresh": (options or {}).get("refresh", "debounced"),
+                        "validate": (options or {}).get("validate", "standard"),
+                        "applyMode": (
+                            "atomic"
+                            if len(at_edits) > 1
+                            else (options or {}).get("applyMode", "sequential")
+                        ),
+                    },
                 }
                 resp_text = await send_with_unity_instance(
                     async_send_command_with_retry,
@@ -503,10 +700,22 @@ async def script_apply_edits(
                     params_text,
                 )
                 if not (isinstance(resp_text, dict) and resp_text.get("success")):
-                    return _with_norm(resp_text if isinstance(resp_text, dict) else {"success": False, "message": str(resp_text)}, normalized_for_echo, routing="mixed/text-first")
+                    return _with_norm(
+                        (
+                            resp_text
+                            if isinstance(resp_text, dict)
+                            else {"success": False, "message": str(resp_text)}
+                        ),
+                        normalized_for_echo,
+                        routing="mixed/text-first",
+                    )
                 # Optional sentinel reload removed (deprecated)
         except Exception as e:
-            return _with_norm({"success": False, "message": f"Text edit conversion failed: {e}"}, normalized_for_echo, routing="mixed/text-first")
+            return _with_norm(
+                {"success": False, "message": f"Text edit conversion failed: {e}"},
+                normalized_for_echo,
+                routing="mixed/text-first",
+            )
 
         if struct_edits:
             opts2 = dict(options or {})
@@ -519,7 +728,7 @@ async def script_apply_edits(
                 "namespace": namespace,
                 "scriptType": script_type,
                 "edits": struct_edits,
-                "options": opts2
+                "options": opts2,
             }
             resp_struct = await send_with_unity_instance(
                 async_send_command_with_retry,
@@ -529,17 +738,39 @@ async def script_apply_edits(
             )
             if isinstance(resp_struct, dict) and resp_struct.get("success"):
                 pass  # Optional sentinel reload removed (deprecated)
-            return _with_norm(resp_struct if isinstance(resp_struct, dict) else {"success": False, "message": str(resp_struct)}, normalized_for_echo, routing="mixed/text-first")
+            return _with_norm(
+                (
+                    resp_struct
+                    if isinstance(resp_struct, dict)
+                    else {"success": False, "message": str(resp_struct)}
+                ),
+                normalized_for_echo,
+                routing="mixed/text-first",
+            )
 
-        return _with_norm({"success": True, "message": "Applied text edits (no structured ops)"}, normalized_for_echo, routing="mixed/text-first")
+        return _with_norm(
+            {"success": True, "message": "Applied text edits (no structured ops)"},
+            normalized_for_echo,
+            routing="mixed/text-first",
+        )
 
     # If the edits are text-ops, prefer sending them to Unity's apply_text_edits with precondition
     # so header guards and validation run on the C# side.
     # Supported conversions: anchor_insert, replace_range, regex_replace (first match only).
-    text_ops = {(e.get("op") or e.get("operation") or e.get("type") or e.get(
-        "mode") or "").strip().lower() for e in (edits or [])}
-    structured_kinds = {"replace_class", "delete_class",
-                        "replace_method", "delete_method", "insert_method", "anchor_insert"}
+    text_ops = {
+        (e.get("op") or e.get("operation") or e.get("type") or e.get("mode") or "")
+        .strip()
+        .lower()
+        for e in (edits or [])
+    }
+    structured_kinds = {
+        "replace_class",
+        "delete_class",
+        "replace_method",
+        "delete_method",
+        "insert_method",
+        "anchor_insert",
+    }
     if not text_ops.issubset(structured_kinds):
         # Convert to apply_text_edits payload
         try:
@@ -549,30 +780,59 @@ async def script_apply_edits(
                 # 1-based line/col against base buffer
                 line = base_text.count("\n", 0, idx) + 1
                 last_nl = base_text.rfind("\n", 0, idx)
-                col = (idx - (last_nl + 1)) + \
-                    1 if last_nl >= 0 else idx + 1
+                col = (idx - (last_nl + 1)) + 1 if last_nl >= 0 else idx + 1
                 return line, col
 
             at_edits: list[dict[str, Any]] = []
             for e in edits or []:
-                op = (e.get("op") or e.get("operation") or e.get(
-                    "type") or e.get("mode") or "").strip().lower()
+                op = (
+                    (
+                        e.get("op")
+                        or e.get("operation")
+                        or e.get("type")
+                        or e.get("mode")
+                        or ""
+                    )
+                    .strip()
+                    .lower()
+                )
                 # aliasing for text field
-                text_field = e.get("text") or e.get(
-                    "insert") or e.get("content") or ""
+                text_field = e.get("text") or e.get("insert") or e.get("content") or ""
                 if op == "anchor_insert":
                     anchor = e.get("anchor") or ""
                     position = (e.get("position") or "after").lower()
                     # Use improved anchor matching logic with helpful errors, honoring ignore_case
                     try:
                         flags = re.MULTILINE | (
-                            re.IGNORECASE if e.get("ignore_case") else 0)
+                            re.IGNORECASE if e.get("ignore_case") else 0
+                        )
                         m = find_best_anchor_match(
-                            anchor, base_text, flags, prefer_last=True)
+                            anchor, base_text, flags, prefer_last=True
+                        )
                     except Exception as ex:
-                        return _with_norm(_err("bad_regex", f"Invalid anchor regex: {ex}", normalized=normalized_for_echo, routing="text", extra={"hint": "Escape parentheses/braces or use a simpler anchor."}), normalized_for_echo, routing="text")
+                        return _with_norm(
+                            _err(
+                                "bad_regex",
+                                f"Invalid anchor regex: {ex}",
+                                normalized=normalized_for_echo,
+                                routing="text",
+                                extra={
+                                    "hint": "Escape parentheses/braces or use a simpler anchor."
+                                },
+                            ),
+                            normalized_for_echo,
+                            routing="text",
+                        )
                     if not m:
-                        return _with_norm({"success": False, "code": "anchor_not_found", "message": f"anchor not found: {anchor}"}, normalized_for_echo, routing="text")
+                        return _with_norm(
+                            {
+                                "success": False,
+                                "code": "anchor_not_found",
+                                "message": f"anchor not found: {anchor}",
+                            },
+                            normalized_for_echo,
+                            routing="text",
+                        )
                     idx = m.start() if position == "before" else m.end()
                     # Normalize insertion newlines
                     if text_field and not text_field.startswith("\n"):
@@ -580,63 +840,110 @@ async def script_apply_edits(
                     if text_field and not text_field.endswith("\n"):
                         text_field = text_field + "\n"
                     sl, sc = line_col_from_index(idx)
-                    at_edits.append({
-                        "startLine": sl,
-                        "startCol": sc,
-                        "endLine": sl,
-                        "endCol": sc,
-                        "newText": text_field or ""
-                    })
+                    at_edits.append(
+                        {
+                            "startLine": sl,
+                            "startCol": sc,
+                            "endLine": sl,
+                            "endCol": sc,
+                            "newText": text_field or "",
+                        }
+                    )
                     # Do not mutate base buffer when building an atomic batch
                 elif op == "replace_range":
                     # Directly forward if already in line/col form
                     if "startLine" in e:
-                        at_edits.append({
-                            "startLine": int(e.get("startLine", 1)),
-                            "startCol": int(e.get("startCol", 1)),
-                            "endLine": int(e.get("endLine", 1)),
-                            "endCol": int(e.get("endCol", 1)),
-                            "newText": text_field
-                        })
+                        at_edits.append(
+                            {
+                                "startLine": int(e.get("startLine", 1)),
+                                "startCol": int(e.get("startCol", 1)),
+                                "endLine": int(e.get("endLine", 1)),
+                                "endCol": int(e.get("endCol", 1)),
+                                "newText": text_field,
+                            }
+                        )
                     else:
                         # If only indices provided, skip (we don't support index-based here)
-                        return _with_norm({"success": False, "code": "missing_field", "message": "replace_range requires startLine/startCol/endLine/endCol"}, normalized_for_echo, routing="text")
+                        return _with_norm(
+                            {
+                                "success": False,
+                                "code": "missing_field",
+                                "message": "replace_range requires startLine/startCol/endLine/endCol",
+                            },
+                            normalized_for_echo,
+                            routing="text",
+                        )
                 elif op == "regex_replace":
                     pattern = e.get("pattern") or ""
                     repl = text_field
                     flags = re.MULTILINE | (
-                        re.IGNORECASE if e.get("ignore_case") else 0)
+                        re.IGNORECASE if e.get("ignore_case") else 0
+                    )
                     # Early compile for clearer error messages
                     try:
                         regex_obj = re.compile(pattern, flags)
                     except Exception as ex:
-                        return _with_norm(_err("bad_regex", f"Invalid regex pattern: {ex}", normalized=normalized_for_echo, routing="text", extra={"hint": "Escape special chars or prefer structured delete for methods."}), normalized_for_echo, routing="text")
+                        return _with_norm(
+                            _err(
+                                "bad_regex",
+                                f"Invalid regex pattern: {ex}",
+                                normalized=normalized_for_echo,
+                                routing="text",
+                                extra={
+                                    "hint": "Escape special chars or prefer structured delete for methods."
+                                },
+                            ),
+                            normalized_for_echo,
+                            routing="text",
+                        )
                     # Use smart anchor matching for consistent behavior with anchor_insert
                     m = find_best_anchor_match(
-                        pattern, base_text, flags, prefer_last=True)
+                        pattern, base_text, flags, prefer_last=True
+                    )
                     if not m:
                         continue
                     # Expand $1, $2... backrefs in replacement using the first match (consistent with mixed-path behavior)
 
                     def _expand_dollars(rep: str, _m=m) -> str:
-                        return _DOLLAR_BACKREF_PATTERN.sub(lambda g: _m.group(int(g.group(1))) or "", rep)
+                        return _DOLLAR_BACKREF_PATTERN.sub(
+                            lambda g: _m.group(int(g.group(1))) or "", rep
+                        )
+
                     repl_expanded = _expand_dollars(repl)
                     # Let C# side handle validation using Unity's built-in compiler services
                     sl, sc = line_col_from_index(m.start())
                     el, ec = line_col_from_index(m.end())
-                    at_edits.append({
-                        "startLine": sl,
-                        "startCol": sc,
-                        "endLine": el,
-                        "endCol": ec,
-                        "newText": repl_expanded
-                    })
+                    at_edits.append(
+                        {
+                            "startLine": sl,
+                            "startCol": sc,
+                            "endLine": el,
+                            "endCol": ec,
+                            "newText": repl_expanded,
+                        }
+                    )
                     # Do not mutate base buffer when building an atomic batch
                 else:
-                    return _with_norm({"success": False, "code": "unsupported_op", "message": f"Unsupported text edit op for server-side apply_text_edits: {op}"}, normalized_for_echo, routing="text")
+                    return _with_norm(
+                        {
+                            "success": False,
+                            "code": "unsupported_op",
+                            "message": f"Unsupported text edit op for server-side apply_text_edits: {op}",
+                        },
+                        normalized_for_echo,
+                        routing="text",
+                    )
 
             if not at_edits:
-                return _with_norm({"success": False, "code": "no_spans", "message": "No applicable text edit spans computed (anchor not found or zero-length)."}, normalized_for_echo, routing="text")
+                return _with_norm(
+                    {
+                        "success": False,
+                        "code": "no_spans",
+                        "message": "No applicable text edit spans computed (anchor not found or zero-length).",
+                    },
+                    normalized_for_echo,
+                    routing="text",
+                )
 
             sha = hashlib.sha256(base_text.encode("utf-8")).hexdigest()
             params: dict[str, Any] = {
@@ -650,8 +957,12 @@ async def script_apply_edits(
                 "options": {
                     "refresh": (options or {}).get("refresh", "debounced"),
                     "validate": (options or {}).get("validate", "standard"),
-                    "applyMode": ("atomic" if len(at_edits) > 1 else (options or {}).get("applyMode", "sequential"))
-                }
+                    "applyMode": (
+                        "atomic"
+                        if len(at_edits) > 1
+                        else (options or {}).get("applyMode", "sequential")
+                    ),
+                },
             }
             resp = await send_with_unity_instance(
                 async_send_command_with_retry,
@@ -662,13 +973,24 @@ async def script_apply_edits(
             if isinstance(resp, dict) and resp.get("success"):
                 pass  # Optional sentinel reload removed (deprecated)
             return _with_norm(
-                resp if isinstance(resp, dict)
-                else {"success": False, "message": str(resp)},
+                (
+                    resp
+                    if isinstance(resp, dict)
+                    else {"success": False, "message": str(resp)}
+                ),
                 normalized_for_echo,
                 routing="text",
             )
         except Exception as e:
-            return _with_norm({"success": False, "code": "conversion_failed", "message": f"Edit conversion failed: {e}"}, normalized_for_echo, routing="text")
+            return _with_norm(
+                {
+                    "success": False,
+                    "code": "conversion_failed",
+                    "message": f"Edit conversion failed: {e}",
+                },
+                normalized_for_echo,
+                routing="text",
+            )
 
     # For regex_replace, honor preview consistently: if preview=true, always return diff without writing.
     # If confirm=false (default) and preview not requested, return diff and instruct confirm=true to apply.
@@ -676,15 +998,46 @@ async def script_apply_edits(
         try:
             preview_text = apply_edits_locally(contents, edits)
             import difflib
-            diff = list(difflib.unified_diff(contents.splitlines(
-            ), preview_text.splitlines(), fromfile="before", tofile="after", n=2))
+
+            diff = list(
+                difflib.unified_diff(
+                    contents.splitlines(),
+                    preview_text.splitlines(),
+                    fromfile="before",
+                    tofile="after",
+                    n=2,
+                )
+            )
             if len(diff) > 800:
                 diff = diff[:800] + ["... (diff truncated) ..."]
             if preview:
-                return {"success": True, "message": "Preview only (no write)", "data": {"diff": "\n".join(diff), "normalizedEdits": normalized_for_echo}}
-            return _with_norm({"success": False, "message": "Preview diff; set options.confirm=true to apply.", "data": {"diff": "\n".join(diff)}}, normalized_for_echo, routing="text")
+                return {
+                    "success": True,
+                    "message": "Preview only (no write)",
+                    "data": {
+                        "diff": "\n".join(diff),
+                        "normalizedEdits": normalized_for_echo,
+                    },
+                }
+            return _with_norm(
+                {
+                    "success": False,
+                    "message": "Preview diff; set options.confirm=true to apply.",
+                    "data": {"diff": "\n".join(diff)},
+                },
+                normalized_for_echo,
+                routing="text",
+            )
         except Exception as e:
-            return _with_norm({"success": False, "code": "preview_failed", "message": f"Preview failed: {e}"}, normalized_for_echo, routing="text")
+            return _with_norm(
+                {
+                    "success": False,
+                    "code": "preview_failed",
+                    "message": f"Preview failed: {e}",
+                },
+                normalized_for_echo,
+                routing="text",
+            )
     # 2) apply edits locally (only if not text-ops)
     try:
         new_contents = apply_edits_locally(contents, edits)
@@ -693,23 +1046,31 @@ async def script_apply_edits(
 
     # Short-circuit no-op edits to avoid false "applied" reports downstream
     if new_contents == contents:
-        return _with_norm({
-            "success": True,
-            "message": "No-op: contents unchanged",
-            "data": {"no_op": True, "evidence": {"reason": "identical_content"}}
-        }, normalized_for_echo, routing="text")
+        return _with_norm(
+            {
+                "success": True,
+                "message": "No-op: contents unchanged",
+                "data": {"no_op": True, "evidence": {"reason": "identical_content"}},
+            },
+            normalized_for_echo,
+            routing="text",
+        )
 
     if preview:
         # Produce a compact unified diff limited to small context
         import difflib
+
         a = contents.splitlines()
         b = new_contents.splitlines()
-        diff = list(difflib.unified_diff(
-            a, b, fromfile="before", tofile="after", n=3))
+        diff = list(difflib.unified_diff(a, b, fromfile="before", tofile="after", n=3))
         # Limit diff size to keep responses small
         if len(diff) > 2000:
             diff = diff[:2000] + ["... (diff truncated) ..."]
-        return {"success": True, "message": "Preview only (no write)", "data": {"diff": "\n".join(diff), "normalizedEdits": normalized_for_echo}}
+        return {
+            "success": True,
+            "message": "Preview only (no write)",
+            "data": {"diff": "\n".join(diff), "normalizedEdits": normalized_for_echo},
+        }
 
     # 3) update to Unity
     # Default refresh/validate for natural usage on text path as well
@@ -751,8 +1112,11 @@ async def script_apply_edits(
     if isinstance(write_resp, dict) and write_resp.get("success"):
         pass  # Optional sentinel reload removed (deprecated)
     return _with_norm(
-        write_resp if isinstance(write_resp, dict)
-        else {"success": False, "message": str(write_resp)},
+        (
+            write_resp
+            if isinstance(write_resp, dict)
+            else {"success": False, "message": str(write_resp)}
+        ),
         normalized_for_echo,
         routing="text",
     )

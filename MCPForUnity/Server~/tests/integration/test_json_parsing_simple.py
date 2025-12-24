@@ -2,7 +2,9 @@
 Simple tests for JSON string parameter parsing logic.
 Tests the core JSON parsing functionality without MCP server dependencies.
 """
+
 import json
+
 import pytest
 
 
@@ -25,7 +27,9 @@ class TestJsonParsingLogic:
 
     def test_valid_json_string_parsing(self):
         """Test that valid JSON strings are correctly parsed."""
-        json_string = '{"shader": "Universal Render Pipeline/Lit", "color": [0, 0, 1, 1]}'
+        json_string = (
+            '{"shader": "Universal Render Pipeline/Lit", "color": [0, 0, 1, 1]}'
+        )
 
         result, status = parse_properties_json(json_string)
 
@@ -46,7 +50,9 @@ class TestJsonParsingLogic:
     def test_dict_input_unchanged(self):
         """Test that dict inputs are passed through unchanged."""
         original_dict = {
-            "shader": "Universal Render Pipeline/Lit", "color": [0, 0, 1, 1]}
+            "shader": "Universal Render Pipeline/Lit",
+            "color": [0, 0, 1, 1],
+        }
 
         result, status = parse_properties_json(original_dict)
 
@@ -62,14 +68,14 @@ class TestJsonParsingLogic:
 
     def test_complex_json_parsing(self):
         """Test parsing of complex JSON with nested objects and arrays."""
-        complex_json = '''
+        complex_json = """
         {
             "shader": "Universal Render Pipeline/Lit",
             "color": [1, 0, 0, 1],
             "float": {"name": "_Metallic", "value": 0.5},
             "texture": {"name": "_MainTex", "path": "Assets/Textures/Test.png"}
         }
-        '''
+        """
 
         result, status = parse_properties_json(complex_json)
 
@@ -99,8 +105,8 @@ class TestJsonParsingLogic:
             '{"missing": "quote}',
             '{"trailing": "comma",}',
             '{"unclosed": [1, 2, 3}',
-            'not json at all',
-            '{"nested": {"broken": }'
+            "not json at all",
+            '{"nested": {"broken": }',
         ]
 
         for malformed_json in test_cases:

@@ -18,6 +18,7 @@ class DummyContext:
 
     def __init__(self, **meta):
         import uuid
+
         self.log_info = []
         self.log_warning = []
         self.log_error = []

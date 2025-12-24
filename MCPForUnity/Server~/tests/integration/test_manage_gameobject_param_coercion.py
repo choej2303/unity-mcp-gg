@@ -1,7 +1,8 @@
 import pytest
 
-from .test_helpers import DummyContext
 import services.tools.manage_gameobject as manage_go_mod
+
+from .test_helpers import DummyContext
 
 
 @pytest.mark.asyncio
@@ -32,5 +33,7 @@ async def test_manage_gameobject_boolean_and_tag_mapping(monkeypatch):
     assert "data" in resp
     # ensure tag mapped to searchTerm and booleans passed through; C# side coerces true/false already
     assert captured["params"]["searchTerm"] == "Player"
-    assert captured["params"]["findAll"] == "true" or captured["params"]["findAll"] is True
+    assert (
+        captured["params"]["findAll"] == "true" or captured["params"]["findAll"] is True
+    )
     assert captured["params"]["searchInactive"] in ("0", False, 0)

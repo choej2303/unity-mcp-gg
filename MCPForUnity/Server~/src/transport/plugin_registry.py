@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-
-import asyncio
 
 from models.models import ToolDefinitionModel
 
@@ -90,7 +89,9 @@ class PluginRegistry:
                 if mapped == session_id:
                     del self._hash_to_session[session.project_hash]
 
-    async def register_tools_for_session(self, session_id: str, tools: list[ToolDefinitionModel]) -> None:
+    async def register_tools_for_session(
+        self, session_id: str, tools: list[ToolDefinitionModel]
+    ) -> None:
         """Register tools for a specific session."""
         async with self._lock:
             session = self._sessions.get(session_id)

@@ -1,32 +1,43 @@
-from typing import Annotated, Literal, Any
+from typing import Annotated, Any, Literal
 
 from fastmcp import Context
+
 from services.registry import mcp_for_unity_tool
 from services.tools import get_unity_instance_from_context
-from transport.unity_transport import send_with_unity_instance
 from transport.legacy.unity_connection import async_send_command_with_retry
+from transport.unity_transport import send_with_unity_instance
 
 
-@mcp_for_unity_tool(
-    description="Performs CRUD operations on Unity scenes."
-)
+@mcp_for_unity_tool(description="Performs CRUD operations on Unity scenes.")
 async def manage_scene(
     ctx: Context,
-    action: Annotated[Literal[
-        "create",
-        "load",
-        "save",
-        "get_hierarchy",
-        "get_active",
-        "get_build_settings",
-        "screenshot",
-    ], "Perform CRUD operations on Unity scenes, and capture a screenshot."],
+    action: Annotated[
+        Literal[
+            "create",
+            "load",
+            "save",
+            "get_hierarchy",
+            "get_active",
+            "get_build_settings",
+            "screenshot",
+        ],
+        "Perform CRUD operations on Unity scenes, and capture a screenshot.",
+    ],
     name: Annotated[str, "Scene name."] | None = None,
     path: Annotated[str, "Scene path."] | None = None,
-    build_index: Annotated[int | str,
-                           "Unity build index (quote as string, e.g., '0')."] | None = None,
-    screenshot_file_name: Annotated[str, "Screenshot file name (optional). Defaults to timestamp when omitted."] | None = None,
-    screenshot_super_size: Annotated[int | str, "Screenshot supersize multiplier (integer ≥1). Optional." ] | None = None,
+    build_index: (
+        Annotated[int | str, "Unity build index (quote as string, e.g., '0')."] | None
+    ) = None,
+    screenshot_file_name: (
+        Annotated[
+            str, "Screenshot file name (optional). Defaults to timestamp when omitted."
+        ]
+        | None
+    ) = None,
+    screenshot_super_size: (
+        Annotated[int | str, "Screenshot supersize multiplier (integer ≥1). Optional."]
+        | None
+    ) = None,
 ) -> dict[str, Any]:
     # Get active instance from session state
     # Removed session_state import
@@ -64,7 +75,9 @@ async def manage_scene(
             params["superSize"] = coerced_super_size
 
         # Use centralized retry helper with instance routing
-        response = await send_with_unity_instance(async_send_command_with_retry, unity_instance, "manage_scene", params)
+        response = await send_with_unity_instance(
+            async_send_command_with_retry, unity_instance, "manage_scene", params
+        )
 
         # Preserve structured failure data; unwrap success into a friendlier shape
         if isinstance(response, dict) and response.get("success"):
@@ -73,11 +86,20 @@ async def manage_scene(
             if isinstance(data, str) and (data.startswith("{") or data.startswith("[")):
                 try:
                     import json
+
                     data = json.loads(data)
                 except Exception:
                     pass
-            return {"success": True, "message": response.get("message", "Scene operation successful."), "data": data}
-        return response if isinstance(response, dict) else {"success": False, "message": str(response)}
+            return {
+                "success": True,
+                "message": response.get("message", "Scene operation successful."),
+                "data": data,
+            }
+        return (
+            response
+            if isinstance(response, dict)
+            else {"success": False, "message": str(response)}
+        )
 
     except Exception as e:
         return {"success": False, "message": f"Python error managing scene: {str(e)}"}
